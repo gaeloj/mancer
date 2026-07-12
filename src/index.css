@@ -1,0 +1,38 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+@media print {
+  /* Hide every single element on the page */
+  body * {
+    visibility: hidden;
+    background-color: transparent !important;
+  }
+  
+  /* Make only the print container and its contents visible */
+  .print\:block, .print\:block * {
+    visibility: visible;
+  }
+  
+  /* Reset the position of the print container to the top-left */
+  .print\:block {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    margin: 0;
+    padding: 24px;
+    background-color: white !important;
+    color: black !important;
+  }
+  
+  /* Ensure page breaks don't chop text or tables weirdly */
+  tr {
+    page-break-inside: avoid;
+  }
+}
