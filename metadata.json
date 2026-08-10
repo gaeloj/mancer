@@ -1,0 +1,6 @@
+{
+  "name": "UniOn",
+  "description": "Sistema de gestão para associações, com controle de associados, registro de entradas e saídas de valores e portal para associados.",
+  "requestFramePermissions": ["camera", "geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
