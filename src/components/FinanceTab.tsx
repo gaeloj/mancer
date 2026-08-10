@@ -1,17 +1,18 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   DollarSign, ArrowUpRight, ArrowDownRight, Plus, Search, 
   Trash2, X, Filter, Calendar, Clock, CreditCard, Tag, AlertCircle, 
   FileSpreadsheet, FileText, Printer, Eye, History
 } from 'lucide-react';
-import { Transaction, Associate, ReportCopy } from '../types';
+import { Transaction, Associate, ReportCopy, EntityConfig } from '../types';
 import { maskMoney, parseMaskedMoney, maskDate, dateToISO, dateToBRL, maskTime, maskCpfCnpj } from '../utils/formatters';
 
 interface FinanceTabProps {
   transactions: Transaction[];
   associates: Associate[];
   reports: ReportCopy[];
+  entityConfig?: EntityConfig | null;
   onAddTransaction: (transaction: Omit<Transaction, 'id'>) => void;
   onDeleteTransaction: (id: string) => void;
   onAddReport: (report: ReportCopy) => void;
@@ -22,6 +23,7 @@ export default function FinanceTab({
   transactions, 
   associates, 
   reports = [],
+  entityConfig,
   onAddTransaction, 
   onDeleteTransaction,
   onAddReport,
@@ -41,9 +43,21 @@ export default function FinanceTab({
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [selectedReportCopy, setSelectedReportCopy] = useState<ReportCopy | null>(null);
   const [isReportDetailModalOpen, setIsReportDetailModalOpen] = useState(false);
+  const [isPrintingDirectly, setIsPrintingDirectly] = useState(false);
+
+  // States to hold blob URLs for seamless, unblocked printing and downloads in iframes
+  const [currentReportBlobUrl, setCurrentReportBlobUrl] = useState<string>('');
+  const [selectedReportBlobUrl, setSelectedReportBlobUrl] = useState<string>('');
+
+
+
+  // Inline confirmation states for deletion
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [deleteReportConfirmId, setDeleteReportConfirmId] = useState<string | null>(null);
 
   // Form fields for Transaction
   const [description, setDescription] = useState('');
+  const [payerReceiverName, setPayerReceiverName] = useState('');
   const [amount, setAmount] = useState('');
   const [type, setType] = useState<'Entrada' | 'Saída'>('Entrada');
   const [date, setDate] = useState(() => {
@@ -83,6 +97,7 @@ export default function FinanceTab({
 
   const handleOpenModal = () => {
     setDescription('');
+    setPayerReceiverName('');
     setAmount('');
     setType('Entrada');
     setDocument('');
@@ -106,8 +121,8 @@ export default function FinanceTab({
 
   const handleFormSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!description || !amount || !date || !document) {
-      alert('Por favor, preencha todos os campos obrigatórios, incluindo CPF ou CNPJ.');
+    if (!description || !amount || !date || !document || !payerReceiverName) {
+      alert('Por favor, preencha todos os campos obrigatórios, incluindo o Nome e o CPF ou CNPJ de quem pagou ou recebeu.');
       return;
     }
 
@@ -120,9 +135,8 @@ export default function FinanceTab({
     const isoDate = dateToISO(date);
 
     onAddTransaction({
-      description: type === 'Entrada' && associateId 
-        ? `${description} - ${associates.find(a => a.id === associateId)?.name || ''}`.trim()
-        : description,
+      description,
+      payerReceiverName,
       amount: parsedAmount,
       type,
       date: isoDate,
@@ -165,6 +179,443 @@ export default function FinanceTab({
     return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
   };
 
+  const getReportHTML = (reportData: {
+    reportNumber: string;
+    issuedAt: string;
+    filters: { type: string; category: string };
+    transactions: Transaction[];
+    totalInflow: number;
+    totalOutflow: number;
+    netBalance: number;
+  }) => {
+    const entityName = entityConfig?.name || 'UniOn - Sistema de Gestão';
+    const entityAcronym = entityConfig?.acronym || 'UO';
+    const entityCNPJ = entityConfig?.cnpj || '';
+    const entityLogo = entityConfig?.logo || '';
+    const entityAddress = entityConfig?.address || '';
+    const entityEmail = entityConfig?.email || '';
+    const entityPhone = entityConfig?.phone || '';
+
+    const transactionsRows = reportData.transactions.map((t) => `
+      <tr style="border-bottom: 1px solid #e2e8f0; font-size: 11px;">
+        <td style="padding: 10px; font-weight: bold; color: ${t.type === 'Entrada' ? '#059669' : '#dc2626'}">
+          ${t.type === 'Entrada' ? 'Receita' : 'Despesa'}
+        </td>
+        <td style="padding: 10px; color: #1e293b;">
+          <strong>${t.description}</strong>
+        </td>
+        <td style="padding: 10px; color: #334155;">${t.payerReceiverName || '-'}</td>
+        <td style="padding: 10px; font-family: monospace; color: #475569;">${t.document || '-'}</td>
+        <td style="padding: 10px; color: #475569;">${t.category}</td>
+        <td style="padding: 10px; font-family: monospace; color: #0f172a; white-space: nowrap;">
+          <div style="font-weight: bold;">${dateToBRL(t.date)}</div>
+          <div style="font-size: 10px; color: #64748b; margin-top: 2px;">${t.time || '12:00:00'}</div>
+        </td>
+        <td style="padding: 10px; color: #475569;">${t.paymentMethod || 'Pix'}</td>
+        <td style="padding: 10px; text-align: right; font-family: monospace; font-weight: bold; color: ${t.type === 'Entrada' ? '#059669' : '#dc2626'}">
+          ${t.type === 'Entrada' ? '+' : '-'} ${formatBRL(t.amount)}
+        </td>
+      </tr>
+    `).join('');
+
+    return `
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Prestação de Contas - ${reportData.reportNumber}</title>
+  <style>
+    body {
+      font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+      margin: 0;
+      padding: 40px;
+      color: #333;
+      background-color: #fff;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 2px solid #000;
+      padding-bottom: 20px;
+      margin-bottom: 30px;
+    }
+    .logo-container {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+    }
+    .logo {
+      width: 60px;
+      height: 60px;
+      object-fit: cover;
+      border-radius: 8px;
+      border: 1px solid #ccc;
+    }
+    .header-text {
+      text-align: right;
+    }
+    .header-text h1 {
+      margin: 0;
+      font-size: 18px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .header-text p {
+      margin: 3px 0 0 0;
+      font-size: 13px;
+      color: #666;
+    }
+    .cnpj {
+      font-family: monospace;
+      font-size: 11px;
+      color: #888;
+    }
+    .meta-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      background-color: #f8fafc;
+      padding: 20px;
+      border-radius: 8px;
+      border: 1px solid #e2e8f0;
+      margin-bottom: 30px;
+      font-size: 12px;
+    }
+    .meta-item span {
+      display: block;
+      font-size: 9px;
+      text-transform: uppercase;
+      color: #64748b;
+      font-weight: bold;
+      margin-bottom: 4px;
+    }
+    .meta-item strong {
+      font-size: 13px;
+      color: #0f172a;
+    }
+    .meta-item-mono {
+      font-family: monospace;
+    }
+    .entity-section {
+      grid-column: span 2;
+      border-top: 1px solid #cbd5e1;
+      padding-top: 15px;
+      margin-top: 5px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    .table-container {
+      margin-bottom: 30px;
+    }
+    .table-container h3 {
+      font-size: 13px;
+      border-bottom: 1px solid #000;
+      padding-bottom: 5px;
+      margin-bottom: 15px;
+      text-transform: uppercase;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th {
+      background-color: #f1f5f9;
+      padding: 10px;
+      font-size: 11px;
+      font-weight: bold;
+      text-align: left;
+      border-bottom: 1px solid #000;
+    }
+    .totals-container {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-top: 2px solid #000;
+      padding-top: 20px;
+      margin-bottom: 50px;
+    }
+    .totals-left {
+      font-size: 12px;
+      color: #475569;
+    }
+    .totals-left p {
+      margin: 4px 0;
+    }
+    .totals-right {
+      text-align: right;
+      padding: 15px;
+      background-color: #f8fafc;
+      border: 1px solid #94a3b8;
+      border-radius: 8px;
+    }
+    .totals-right span {
+      font-size: 10px;
+      text-transform: uppercase;
+      color: #475569;
+      font-weight: bold;
+    }
+    .totals-right strong {
+      display: block;
+      font-size: 18px;
+      font-family: monospace;
+      color: #0f172a;
+      margin-top: 5px;
+    }
+    .signature-area {
+      display: flex;
+      justify-content: space-around;
+      margin-top: 80px;
+      text-align: center;
+      font-size: 12px;
+    }
+    .signature-line {
+      border-top: 1px solid #000;
+      width: 200px;
+      padding-top: 8px;
+    }
+    .btn-print {
+      display: block;
+      width: 200px;
+      margin: 30px auto 0 auto;
+      padding: 12px;
+      background-color: #2563eb;
+      color: white;
+      text-align: center;
+      font-weight: bold;
+      border-radius: 8px;
+      text-decoration: none;
+      box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+    }
+    @media print {
+      .btn-print {
+        display: none;
+      }
+      body {
+        padding: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div class="logo-container">
+      ${entityLogo ? `<img src="${entityLogo}" alt="Logo" class="logo" />` : ''}
+      <div>
+        <h2 style="margin: 0; font-size: 16px; font-weight: bold; color: #0f172a;">${entityName}</h2>
+        ${entityAcronym ? `<p style="margin: 2px 0 0 0; font-size: 11px; color: #475569; font-weight: bold; text-transform: uppercase;">${entityAcronym}</p>` : ''}
+      </div>
+    </div>
+    <div class="header-text">
+      <h1>Relatório de Prestação de Contas</h1>
+      <p>Livro Caixa Autenticado</p>
+      ${entityCNPJ ? `<p class="cnpj">CNPJ: ${entityCNPJ}</p>` : ''}
+    </div>
+  </div>
+
+  <div class="meta-grid">
+    <div class="meta-item">
+      <span>Código do Relatório (Autenticado)</span>
+      <strong class="meta-item-mono">${reportData.reportNumber}</strong>
+    </div>
+    <div class="meta-item">
+      <span>Data e Hora de Emissão</span>
+      <strong class="meta-item-mono">${reportData.issuedAt}</strong>
+    </div>
+    <div class="meta-item" style="margin-top: 15px;">
+      <span>Responsável / Emissor</span>
+      <strong>Administrador de Finanças</strong>
+    </div>
+    <div class="meta-item" style="margin-top: 15px;">
+      <span>Filtros Aplicados</span>
+      <strong class="meta-item-mono">Tipo: ${reportData.filters.type} | Categoria: ${reportData.filters.category}</strong>
+    </div>
+
+    <div class="entity-section">
+      <div>
+        <span>Dados da Entidade</span>
+        <strong>${entityName} ${entityAcronym ? `(${entityAcronym})` : ''}</strong>
+        ${entityCNPJ ? `<span style="text-transform: none; font-family: monospace; font-size: 10px; margin-top: 2px;">CNPJ: ${entityCNPJ}</span>` : ''}
+      </div>
+      <div>
+        <span>Contato & Localização</span>
+        <strong>${entityAddress || 'Não cadastrado'}</strong>
+        <span style="text-transform: none; font-family: monospace; font-size: 10px; margin-top: 2px;">${entityEmail} | ${entityPhone}</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="table-container">
+    <h3>Lançamentos Financeiros Inclusos</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Tipo</th>
+          <th>Descrição</th>
+          <th>Pagador / Recebedor</th>
+          <th>CPF/CNPJ</th>
+          <th>Categoria</th>
+          <th>Data / Hora</th>
+          <th>Método</th>
+          <th style="text-align: right;">Valor</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${transactionsRows}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="totals-container">
+    <div class="totals-left">
+      <p>Total Receitas Inclusas: <strong>${formatBRL(reportData.totalInflow)}</strong></p>
+      <p>Total Despesas Inclusas: <strong>${formatBRL(reportData.totalOutflow)}</strong></p>
+    </div>
+    <div class="totals-right">
+      <span>Saldo Final Líquido do Período</span>
+      <strong>${formatBRL(reportData.netBalance)}</strong>
+    </div>
+  </div>
+
+  <div class="signature-area">
+    <div>
+      <div class="signature-line"></div>
+      <span>Administrador de Finanças</span>
+      <p style="margin: 4px 0 0 0; font-size: 10px; color: #666;">${entityName}</p>
+    </div>
+    <div>
+      <div class="signature-line"></div>
+      <span>Conselho Fiscal / Auditoria</span>
+      <p style="margin: 4px 0 0 0; font-size: 10px; color: #666;">${entityAcronym || 'Entidade'}</p>
+    </div>
+  </div>
+
+  <a href="#" class="btn-print" onclick="window.print(); return false;">Imprimir / Salvar PDF</a>
+
+  <script>
+    window.onload = function() {
+      setTimeout(function() {
+        window.print();
+      }, 500);
+    };
+  </script>
+</body>
+</html>
+    `;
+  };
+
+  const printReportHTML = (reportData: {
+    reportNumber: string;
+    issuedAt: string;
+    filters: { type: string; category: string };
+    transactions: Transaction[];
+    totalInflow: number;
+    totalOutflow: number;
+    netBalance: number;
+  }) => {
+    const htmlContent = getReportHTML(reportData);
+    
+    // Create hidden iframe
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    iframe.setAttribute('title', 'Print Frame');
+    document.body.appendChild(iframe);
+    
+    const iframeDoc = iframe.contentWindow?.document || iframe.contentDocument;
+    if (iframeDoc) {
+      iframeDoc.open();
+      iframeDoc.write(htmlContent);
+      iframeDoc.close();
+      
+      // Wait slightly, then focus and print
+      setTimeout(() => {
+        try {
+          iframe.contentWindow?.focus();
+          iframe.contentWindow?.print();
+        } catch (e) {
+          console.error("Erro ao imprimir via iframe:", e);
+        }
+        
+        // Cleanup frame safely
+        setTimeout(() => {
+          try {
+            document.body.removeChild(iframe);
+          } catch (err) {
+            console.error(err);
+          }
+        }, 1500);
+      }, 500);
+    }
+  };
+
+  // Generate/Revoke current live report blob URL
+  useEffect(() => {
+    if (filteredTransactions.length === 0) {
+      setCurrentReportBlobUrl('');
+      return;
+    }
+    const htmlContent = getReportHTML({
+      reportNumber,
+      issuedAt: reportIssuedAt,
+      filters: { type: typeFilter, category: categoryFilter },
+      transactions: filteredTransactions,
+      totalInflow,
+      totalOutflow,
+      netBalance
+    });
+
+    const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    setCurrentReportBlobUrl(url);
+
+    return () => {
+      URL.revokeObjectURL(url);
+    };
+  }, [
+    filteredTransactions,
+    typeFilter,
+    categoryFilter,
+    reportNumber,
+    reportIssuedAt,
+    totalInflow,
+    totalOutflow,
+    netBalance,
+    entityConfig
+  ]);
+
+  // Generate/Revoke selected archived report blob URL
+  useEffect(() => {
+    if (!selectedReportCopy) {
+      setSelectedReportBlobUrl('');
+      return;
+    }
+
+    const htmlContent = getReportHTML({
+      reportNumber: selectedReportCopy.reportNumber,
+      issuedAt: selectedReportCopy.issuedAt,
+      filters: selectedReportCopy.filters,
+      transactions: selectedReportCopy.transactions as Transaction[],
+      totalInflow: selectedReportCopy.totalInflow,
+      totalOutflow: selectedReportCopy.totalOutflow,
+      netBalance: selectedReportCopy.netBalance
+    });
+
+    const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    setSelectedReportBlobUrl(url);
+
+    return () => {
+      URL.revokeObjectURL(url);
+    };
+  }, [selectedReportCopy, entityConfig]);
+
   // Prepare Report Generation
   const handleOpenReportModal = () => {
     if (filteredTransactions.length === 0) {
@@ -184,6 +635,375 @@ export default function FinanceTab({
     setReportNumber(code);
     setReportIssuedAt(`${formattedDate} às ${formattedTime}`);
     setIsReportModalOpen(true);
+  };
+
+  const downloadPrintableReport = (reportData: {
+    reportNumber: string;
+    issuedAt: string;
+    filters: { type: string; category: string };
+    transactions: Transaction[];
+    totalInflow: number;
+    totalOutflow: number;
+    netBalance: number;
+  }) => {
+    const reportHtml = getReportHTML(reportData);
+    
+    // 1. Attempt direct download via blob URL first (might work if user is already browsing out-of-iframe)
+    try {
+      const blob = new Blob([reportHtml], { type: 'text/html;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      
+      const entityNameClean = (entityConfig?.acronym || entityConfig?.name || 'union').toLowerCase().replace(/[^a-z0-9]/g, '_');
+      link.setAttribute('download', `prestacao_contas_${entityNameClean}_${reportData.reportNumber}.html`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error("Direct download blocked by sandboxed iframe environment:", e);
+    }
+
+    // 2. Open in a new tab so the user can easily click 'Baixar HTML' or 'Imprimir' with 100% bypass of sandboxing
+    const printWindow = window.open('', '_blank');
+    if (printWindow) {
+      printWindow.document.open();
+      printWindow.document.write(reportHtml);
+      printWindow.document.close();
+    } else {
+      alert("Para baixar e imprimir com sucesso dentro do painel, por favor permita pop-ups ou abra o aplicativo em uma nova aba usando o botão no topo do painel.");
+    }
+    return; // Bypass legacy duplicated HTML builder below safely
+
+    const entityName = entityConfig?.name || 'UniOn - Sistema de Gestão';
+    const entityAcronym = entityConfig?.acronym || 'UO';
+    const entityCNPJ = entityConfig?.cnpj || '';
+    const entityLogo = entityConfig?.logo || '';
+    const entityAddress = entityConfig?.address || '';
+    const entityEmail = entityConfig?.email || '';
+    const entityPhone = entityConfig?.phone || '';
+
+    const transactionsRows = reportData.transactions.map((t) => `
+      <tr style="border-bottom: 1px solid #e2e8f0; font-size: 11px;">
+        <td style="padding: 10px; font-weight: bold; color: ${t.type === 'Entrada' ? '#059669' : '#dc2626'}">
+          ${t.type === 'Entrada' ? 'Receita' : 'Despesa'}
+        </td>
+        <td style="padding: 10px; color: #1e293b;">
+          <strong>${t.description}</strong>
+        </td>
+        <td style="padding: 10px; color: #334155;">${t.payerReceiverName || '-'}</td>
+        <td style="padding: 10px; font-family: monospace; color: #475569;">${t.document || '-'}</td>
+        <td style="padding: 10px; color: #475569;">${t.category}</td>
+        <td style="padding: 10px; font-family: monospace; color: #0f172a;">
+          ${dateToBRL(t.date)} às ${t.time || '12:00:00'}
+        </td>
+        <td style="padding: 10px; color: #475569;">${t.paymentMethod || 'Pix'}</td>
+        <td style="padding: 10px; text-align: right; font-family: monospace; font-weight: bold; color: ${t.type === 'Entrada' ? '#059669' : '#dc2626'}">
+          ${t.type === 'Entrada' ? '+' : '-'} ${formatBRL(t.amount)}
+        </td>
+      </tr>
+    `).join('');
+
+    const htmlContent = `
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Prestação de Contas - ${reportData.reportNumber}</title>
+  <style>
+    body {
+      font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+      margin: 0;
+      padding: 40px;
+      color: #333;
+      background-color: #fff;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 2px solid #000;
+      padding-bottom: 20px;
+      margin-bottom: 30px;
+    }
+    .logo-container {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+    }
+    .logo {
+      width: 60px;
+      height: 60px;
+      object-fit: cover;
+      border-radius: 8px;
+      border: 1px solid #ccc;
+    }
+    .header-text {
+      text-align: right;
+    }
+    .header-text h1 {
+      margin: 0;
+      font-size: 18px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .header-text p {
+      margin: 3px 0 0 0;
+      font-size: 13px;
+      color: #666;
+    }
+    .cnpj {
+      font-family: monospace;
+      font-size: 11px;
+      color: #888;
+    }
+    .meta-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      background-color: #f8fafc;
+      padding: 20px;
+      border-radius: 8px;
+      border: 1px solid #e2e8f0;
+      margin-bottom: 30px;
+      font-size: 12px;
+    }
+    .meta-item span {
+      display: block;
+      font-size: 9px;
+      text-transform: uppercase;
+      color: #64748b;
+      font-weight: bold;
+      margin-bottom: 4px;
+    }
+    .meta-item strong {
+      font-size: 13px;
+      color: #0f172a;
+    }
+    .meta-item-mono {
+      font-family: monospace;
+    }
+    .entity-section {
+      grid-column: span 2;
+      border-top: 1px solid #cbd5e1;
+      padding-top: 15px;
+      margin-top: 5px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+    .table-container {
+      margin-bottom: 30px;
+    }
+    .table-container h3 {
+      font-size: 13px;
+      border-bottom: 1px solid #000;
+      padding-bottom: 5px;
+      margin-bottom: 15px;
+      text-transform: uppercase;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th {
+      background-color: #f1f5f9;
+      padding: 10px;
+      font-size: 11px;
+      font-weight: bold;
+      text-align: left;
+      border-bottom: 1px solid #000;
+    }
+    .totals-container {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-top: 2px solid #000;
+      padding-top: 20px;
+      margin-bottom: 50px;
+    }
+    .totals-left {
+      font-size: 12px;
+      color: #475569;
+    }
+    .totals-left p {
+      margin: 4px 0;
+    }
+    .totals-right {
+      text-align: right;
+      padding: 15px;
+      background-color: #f8fafc;
+      border: 1px solid #94a3b8;
+      border-radius: 8px;
+    }
+    .totals-right span {
+      font-size: 10px;
+      text-transform: uppercase;
+      color: #475569;
+      font-weight: bold;
+    }
+    .totals-right strong {
+      display: block;
+      font-size: 18px;
+      font-family: monospace;
+      color: #0f172a;
+      margin-top: 5px;
+    }
+    .signature-area {
+      display: flex;
+      justify-content: space-around;
+      margin-top: 80px;
+      text-align: center;
+      font-size: 12px;
+    }
+    .signature-line {
+      border-top: 1px solid #000;
+      width: 200px;
+      padding-top: 8px;
+    }
+    .btn-print {
+      display: block;
+      width: 200px;
+      margin: 30px auto 0 auto;
+      padding: 12px;
+      background-color: #059669;
+      color: white;
+      text-align: center;
+      font-weight: bold;
+      border-radius: 8px;
+      text-decoration: none;
+      box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+    }
+    @media print {
+      .btn-print {
+        display: none;
+      }
+      body {
+        padding: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div class="logo-container">
+      ${entityLogo ? `<img src="${entityLogo}" alt="Logo" class="logo" />` : ''}
+      <div>
+        <h2 style="margin: 0; font-size: 16px; font-weight: bold; color: #0f172a;">${entityName}</h2>
+        ${entityAcronym ? `<p style="margin: 2px 0 0 0; font-size: 11px; color: #475569; font-weight: bold; text-transform: uppercase;">${entityAcronym}</p>` : ''}
+      </div>
+    </div>
+    <div class="header-text">
+      <h1>Relatório de Prestação de Contas</h1>
+      <p>Livro Caixa Autenticado</p>
+      ${entityCNPJ ? `<p class="cnpj">CNPJ: ${entityCNPJ}</p>` : ''}
+    </div>
+  </div>
+
+  <div class="meta-grid">
+    <div class="meta-item">
+      <span>Código do Relatório (Autenticado)</span>
+      <strong class="meta-item-mono">${reportData.reportNumber}</strong>
+    </div>
+    <div class="meta-item">
+      <span>Data e Hora de Emissão</span>
+      <strong class="meta-item-mono">${reportData.issuedAt}</strong>
+    </div>
+    <div class="meta-item" style="margin-top: 15px;">
+      <span>Responsável / Emissor</span>
+      <strong>Administrador de Finanças</strong>
+    </div>
+    <div class="meta-item" style="margin-top: 15px;">
+      <span>Filtros Aplicados</span>
+      <strong class="meta-item-mono">Tipo: ${reportData.filters.type} | Categoria: ${reportData.filters.category}</strong>
+    </div>
+
+    <div class="entity-section">
+      <div>
+        <span>Dados da Entidade</span>
+        <strong>${entityName} ${entityAcronym ? `(${entityAcronym})` : ''}</strong>
+        ${entityCNPJ ? `<span style="text-transform: none; font-family: monospace; font-size: 10px; margin-top: 2px;">CNPJ: ${entityCNPJ}</span>` : ''}
+      </div>
+      <div>
+        <span>Contato & Localização</span>
+        <strong>${entityAddress || 'Não cadastrado'}</strong>
+        <span style="text-transform: none; font-family: monospace; font-size: 10px; margin-top: 2px;">${entityEmail} | ${entityPhone}</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="table-container">
+    <h3>Lançamentos Financeiros Inclusos</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Tipo</th>
+          <th>Descrição</th>
+          <th>Pagador / Recebedor</th>
+          <th>CPF/CNPJ</th>
+          <th>Categoria</th>
+          <th>Data / Hora</th>
+          <th>Método</th>
+          <th style="text-align: right;">Valor</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${transactionsRows}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="totals-container">
+    <div class="totals-left">
+      <p>Total Receitas Inclusas: <strong>${formatBRL(reportData.totalInflow)}</strong></p>
+      <p>Total Despesas Inclusas: <strong>${formatBRL(reportData.totalOutflow)}</strong></p>
+    </div>
+    <div class="totals-right">
+      <span>Saldo Final Líquido do Período</span>
+      <strong>${formatBRL(reportData.netBalance)}</strong>
+    </div>
+  </div>
+
+  <div class="signature-area">
+    <div>
+      <div class="signature-line"></div>
+      <span>Administrador de Finanças</span>
+      <p style="margin: 4px 0 0 0; font-size: 10px; color: #666;">${entityName}</p>
+    </div>
+    <div>
+      <div class="signature-line"></div>
+      <span>Conselho Fiscal / Auditoria</span>
+      <p style="margin: 4px 0 0 0; font-size: 10px; color: #666;">${entityAcronym || 'Entidade'}</p>
+    </div>
+  </div>
+
+  <a href="#" class="btn-print" onclick="window.print(); return false;">Imprimir / Salvar PDF</a>
+
+  <script>
+    window.onload = function() {
+      // Auto-trigger print
+      setTimeout(function() {
+        window.print();
+      }, 500);
+    };
+  </script>
+</body>
+</html>
+    `;
+
+    const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    
+    const entityNameClean = entityAcronym || entityName || 'union';
+    const cleanFileName = entityNameClean.toLowerCase().replace(/[^a-z0-9]/g, '_');
+    link.setAttribute('download', `prestacao_contas_${cleanFileName}_${reportData.reportNumber}.html`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const handleConfirmReportEmission = () => {
@@ -206,6 +1026,7 @@ export default function FinanceTab({
         time: t.time,
         category: t.category,
         document: t.document,
+        payerReceiverName: t.payerReceiverName || '',
         createdBy: t.createdBy || 'Administrador'
       })),
       totalInflow,
@@ -216,22 +1037,64 @@ export default function FinanceTab({
     onAddReport(newReport);
     setIsReportModalOpen(false);
 
-    // Trigger printing!
-    setTimeout(() => {
-      window.print();
-    }, 500);
+    // Print the report using our clean hidden iframe method!
+    printReportHTML({
+      reportNumber,
+      issuedAt: reportIssuedAt,
+      filters: { type: typeFilter, category: categoryFilter },
+      transactions: filteredTransactions,
+      totalInflow,
+      totalOutflow,
+      netBalance
+    });
   };
 
   const handlePrintExistingReport = (report: ReportCopy) => {
-    setSelectedReportCopy(report);
-    setTimeout(() => {
-      window.print();
-    }, 300);
+    printReportHTML({
+      reportNumber: report.reportNumber,
+      issuedAt: report.issuedAt,
+      filters: report.filters,
+      transactions: report.transactions as Transaction[],
+      totalInflow: report.totalInflow,
+      totalOutflow: report.totalOutflow,
+      netBalance: report.netBalance
+    });
   };
 
   const handleViewReportDetails = (report: ReportCopy) => {
     setSelectedReportCopy(report);
     setIsReportDetailModalOpen(true);
+  };
+
+  const handleDirectPDFPrint = () => {
+    if (filteredTransactions.length === 0) {
+      alert('Nenhum lançamento filtrado para exportar PDF.');
+      return;
+    }
+
+    // Set printing state to render printable sheet unconditionally
+    setIsPrintingDirectly(true);
+
+    const dateStr = new Date().toLocaleDateString('pt-BR');
+    const timeStr = new Date().toLocaleTimeString('pt-BR');
+    const tempReportNumber = `REP-${Date.now().toString().slice(-6)}`;
+
+    // Fallback/direct download: also prompt saving as print-ready HTML
+    downloadPrintableReport({
+      reportNumber: tempReportNumber,
+      issuedAt: `${dateStr} às ${timeStr}`,
+      filters: { type: typeFilter, category: categoryFilter },
+      transactions: filteredTransactions,
+      totalInflow,
+      totalOutflow,
+      netBalance
+    });
+
+    // Run system printer dialog
+    setTimeout(() => {
+      window.print();
+      setIsPrintingDirectly(false);
+    }, 200);
   };
 
   return (
@@ -358,6 +1221,45 @@ export default function FinanceTab({
                   </select>
                 </div>
 
+                {/* Export PDF button */}
+                {filteredTransactions.length === 0 ? (
+                  <button
+                    id="btn-export-pdf-disabled"
+                    disabled
+                    className="flex items-center gap-1.5 py-2 px-3 bg-white/5 opacity-50 border border-white/10 text-gray-500 text-sm font-semibold rounded-xl cursor-not-allowed"
+                    title="Nenhum lançamento filtrado para exportar"
+                  >
+                    <FileText className="h-4 w-4 text-gray-500" />
+                    Gerar PDF
+                  </button>
+                ) : (
+                  <button
+                    id="btn-export-pdf"
+                    onClick={() => {
+                      const randomNum = Math.floor(10000 + Math.random() * 90000);
+                      const code = `REL-${new Date().getFullYear()}-${randomNum}`;
+                      const now = new Date();
+                      const formattedDate = now.toLocaleDateString('pt-BR');
+                      const formattedTime = now.toLocaleTimeString('pt-BR');
+
+                      printReportHTML({
+                        reportNumber: code,
+                        issuedAt: `${formattedDate} às ${formattedTime}`,
+                        filters: { type: typeFilter, category: categoryFilter },
+                        transactions: filteredTransactions,
+                        totalInflow,
+                        totalOutflow,
+                        netBalance
+                      });
+                    }}
+                    className="flex items-center gap-1.5 py-2 px-3 bg-white/5 hover:bg-white/10 border border-white/10 text-white text-sm font-semibold rounded-xl transition-all cursor-pointer"
+                    title="Imprimir ou salvar relatório de lançamentos filtrados em PDF"
+                  >
+                    <FileText className="h-4 w-4 text-blue-400" />
+                    Gerar PDF
+                  </button>
+                )}
+
                 {/* Emit Report PDF button */}
                 <button
                   id="btn-emit-report"
@@ -417,6 +1319,11 @@ export default function FinanceTab({
                           <td className="px-6 py-4">
                             <p className="text-xs font-bold text-white leading-snug">{t.description}</p>
                             <div className="flex flex-col gap-0.5 mt-0.5">
+                              {t.payerReceiverName && (
+                                <p className="text-[10px] text-gray-400">
+                                  Pagador/Recebedor: <span className="font-medium text-gray-200">{t.payerReceiverName}</span>
+                                </p>
+                              )}
                               {t.document && (
                                 <p className="text-[10px] text-gray-400">
                                   CPF/CNPJ: <span className="font-mono font-medium text-gray-300">{t.document}</span>
@@ -459,17 +1366,33 @@ export default function FinanceTab({
                             </span>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-center">
-                            <button
-                              onClick={() => {
-                                if (window.confirm(`Excluir o lançamento "${t.description}" permanentemente?`)) {
-                                  onDeleteTransaction(t.id);
-                                }
-                              }}
-                              className="text-gray-500 hover:text-rose-400 p-1.5 rounded-lg hover:bg-rose-500/10 transition-colors cursor-pointer"
-                              title="Excluir Lançamento"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </button>
+                            {deleteConfirmId === t.id ? (
+                              <div className="flex items-center justify-center gap-1.5 bg-[#161616] border border-white/10 p-1 rounded-xl">
+                                <button
+                                  onClick={() => {
+                                    onDeleteTransaction(t.id);
+                                    setDeleteConfirmId(null);
+                                  }}
+                                  className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold rounded-lg transition-all cursor-pointer animate-pulse"
+                                >
+                                  Sim
+                                </button>
+                                <button
+                                  onClick={() => setDeleteConfirmId(null)}
+                                  className="px-2 py-1 bg-white/5 border border-white/10 text-gray-400 hover:text-white text-[10px] font-bold rounded-lg transition-all cursor-pointer"
+                                >
+                                  Não
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => setDeleteConfirmId(t.id)}
+                                className="text-gray-500 hover:text-rose-400 p-1.5 rounded-lg hover:bg-rose-500/10 transition-colors cursor-pointer"
+                                title="Excluir Lançamento"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            )}
                           </td>
                         </motion.tr>
                       ))}
@@ -559,17 +1482,33 @@ export default function FinanceTab({
                               <Printer className="h-3.5 w-3.5" />
                               Imprimir
                             </button>
-                            <button
-                              onClick={() => {
-                                if (window.confirm(`Deseja remover permanentemente a cópia do relatório ${report.reportNumber} do arquivo?`)) {
-                                  onDeleteReport(report.id);
-                                }
-                              }}
-                              className="p-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer"
-                              title="Excluir Cópia"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
+                            {deleteReportConfirmId === report.id ? (
+                              <div className="flex items-center justify-center gap-1.5 bg-[#161616] border border-white/10 p-1 rounded-xl">
+                                <button
+                                  onClick={() => {
+                                    onDeleteReport(report.id);
+                                    setDeleteReportConfirmId(null);
+                                  }}
+                                  className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold rounded-lg transition-all cursor-pointer animate-pulse"
+                                >
+                                  Sim
+                                </button>
+                                <button
+                                  onClick={() => setDeleteReportConfirmId(null)}
+                                  className="px-2 py-1 bg-white/5 border border-white/10 text-gray-400 hover:text-white text-[10px] font-bold rounded-lg transition-all cursor-pointer"
+                                >
+                                  Não
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => setDeleteReportConfirmId(report.id)}
+                                className="p-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer"
+                                title="Excluir Cópia"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -661,10 +1600,12 @@ export default function FinanceTab({
                           if (matched) {
                             setDescription(`Mensalidade de ${matched.name}`);
                             setDocument(matched.cpf);
+                            setPayerReceiverName(matched.name);
                           }
                         } else {
                           setDescription('');
                           setDocument('');
+                          setPayerReceiverName('');
                         }
                       }}
                       className="w-full px-3 py-2 bg-[#1a1a1a] border border-white/10 rounded-xl text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
@@ -688,6 +1629,19 @@ export default function FinanceTab({
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
                     placeholder="Ex: Pagamento de mensalidade, Compra de papelaria..."
+                    className="w-full px-3 py-2 bg-[#1a1a1a] border border-white/10 rounded-xl text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                </div>
+
+                {/* Nome do Pagador/Recebedor */}
+                <div>
+                  <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">Nome do Pagador / Recebedor <span className="text-red-500">*</span></label>
+                  <input
+                    type="text"
+                    required
+                    value={payerReceiverName}
+                    onChange={(e) => setPayerReceiverName(e.target.value)}
+                    placeholder="Nome completo ou Razão Social"
                     className="w-full px-3 py-2 bg-[#1a1a1a] border border-white/10 rounded-xl text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
                   />
                 </div>
@@ -766,7 +1720,7 @@ export default function FinanceTab({
                     className="w-full px-3 py-2 bg-[#1a1a1a] border border-white/10 rounded-xl text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
                   >
                     <option value="Pix" className="bg-[#111111]">Pix</option>
-                    <option value="Dinheiro" className="bg-[#111111]">Dinheiro</option>
+                    <option value="Dinheiro em espécie" className="bg-[#111111]">Dinheiro em espécie</option>
                     <option value="Cartão de Crédito" className="bg-[#111111]">Cartão de Crédito</option>
                     <option value="Cartão de Débito" className="bg-[#111111]">Cartão de Débito</option>
                     <option value="Boleto" className="bg-[#111111]">Boleto</option>
@@ -824,28 +1778,54 @@ export default function FinanceTab({
 
               {/* Fake Document Mock View */}
               <div className="bg-white text-black p-6 rounded-xl space-y-4 border border-gray-300 font-sans shadow-lg">
-                <div className="border-b-2 border-black pb-3 text-center space-y-1">
-                  <h2 className="text-base font-extrabold uppercase tracking-wide">Relatório de Prestação de Contas</h2>
-                  <p className="text-[10px] text-gray-500 uppercase tracking-widest font-mono">Associação de Moradores e Amigos</p>
+                <div className="border-b-2 border-black pb-3 flex items-center justify-between gap-4">
+                  {entityConfig?.logo && (
+                    <img 
+                      src={entityConfig.logo} 
+                      alt="Logo da Entidade" 
+                      className="h-12 w-12 object-cover rounded border border-gray-200 shrink-0" 
+                      referrerPolicy="no-referrer"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).src = "https://images.unsplash.com/photo-1560179707-f14e90ef3623?auto=format&fit=crop&q=80&w=200";
+                      }}
+                    />
+                  )}
+                  <div className="text-right flex-1 space-y-0.5">
+                    <h2 className="text-sm font-extrabold uppercase tracking-wide leading-tight text-gray-900">Relatório de Prestação de Contas</h2>
+                    <p className="text-xs font-bold text-gray-700">{entityConfig?.name || 'UniOn - Sistema Unificado'}</p>
+                    {entityConfig?.cnpj && <p className="text-[9px] font-mono text-gray-500">CNPJ: {entityConfig.cnpj}</p>}
+                  </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2 text-[11px] bg-gray-50 p-2.5 rounded border border-gray-200 font-mono">
+                <div className="grid grid-cols-2 gap-2 text-[10px] bg-gray-50 p-2.5 rounded border border-gray-200 font-sans">
                   <div>
-                    <span className="text-gray-500 block">Número de Registro</span>
-                    <strong className="text-blue-700">{reportNumber}</strong>
+                    <span className="text-gray-400 block font-semibold text-[8px] uppercase">Número de Registro</span>
+                    <strong className="text-blue-700 font-mono">{reportNumber}</strong>
                   </div>
                   <div>
-                    <span className="text-gray-500 block">Data e Hora de Emissão</span>
-                    <strong>{reportIssuedAt}</strong>
+                    <span className="text-gray-400 block font-semibold text-[8px] uppercase">Data e Hora de Emissão</span>
+                    <strong className="text-gray-900 font-mono">{reportIssuedAt}</strong>
                   </div>
-                  <div className="mt-1">
-                    <span className="text-gray-500 block">Responsável / Emissor</span>
-                    <strong>Administrador</strong>
+                  <div className="mt-1 col-span-1">
+                    <span className="text-gray-400 block font-semibold text-[8px] uppercase">Responsável / Emissor</span>
+                    <strong className="text-gray-800">Administrador</strong>
                   </div>
-                  <div className="mt-1">
-                    <span className="text-gray-500 block">Filtros Aplicados</span>
-                    <span className="text-gray-600 block text-[10px]">Tipo: {typeFilter} | Categoria: {categoryFilter}</span>
+                  <div className="mt-1 col-span-1">
+                    <span className="text-gray-400 block font-semibold text-[8px] uppercase">Filtros Aplicados</span>
+                    <span className="text-gray-700 font-mono text-[9px]">Tipo: {typeFilter} | Categoria: {categoryFilter}</span>
                   </div>
+                  {entityConfig && (
+                    <div className="col-span-2 border-t border-gray-200 pt-1.5 mt-1.5 grid grid-cols-2 gap-2 text-[9px]">
+                      <div>
+                        <span className="text-gray-400 block font-semibold uppercase">Contato</span>
+                        <span className="text-gray-700 font-mono">{entityConfig.email} | {entityConfig.phone}</span>
+                      </div>
+                      <div>
+                        <span className="text-gray-400 block font-semibold uppercase">Endereço</span>
+                        <span className="text-gray-700">{entityConfig.address}</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Mini transaction summary table */}
@@ -856,8 +1836,9 @@ export default function FinanceTab({
                       <thead>
                         <tr className="bg-gray-100 border-b border-gray-300 text-gray-600 font-bold">
                           <th className="py-1 px-2">Tipo</th>
-                          <th className="py-1 px-2">Descrição</th>
+                          <th className="py-1 px-2">Descrição / Pagador / Recebedor</th>
                           <th className="py-1 px-2">Doc. CPF/CNPJ</th>
+                          <th className="py-1 px-2 text-center">Data / Hora</th>
                           <th className="py-1 px-2 text-right">Valor</th>
                         </tr>
                       </thead>
@@ -865,8 +1846,17 @@ export default function FinanceTab({
                         {filteredTransactions.slice(0, 5).map(t => (
                           <tr key={t.id}>
                             <td className="py-1 px-2 font-bold">{t.type === 'Entrada' ? 'Receita' : 'Despesa'}</td>
-                            <td className="py-1 px-2">{t.description}</td>
+                            <td className="py-1 px-2">
+                              <p className="font-semibold">{t.description}</p>
+                              {t.payerReceiverName && (
+                                <p className="text-[9px] text-gray-500 font-medium">De/Para: {t.payerReceiverName}</p>
+                              )}
+                            </td>
                             <td className="py-1 px-2 font-mono">{t.document || '-'}</td>
+                            <td className="py-1 px-2 text-center font-mono text-[9px] text-slate-700">
+                              <span className="block">{dateToBRL(t.date)}</span>
+                              <span className="block text-[8px] text-slate-500 font-semibold">{t.time || '12:00:00'}</span>
+                            </td>
                             <td className="py-1 px-2 text-right font-mono">{formatBRL(t.amount)}</td>
                           </tr>
                         ))}
@@ -903,8 +1893,28 @@ export default function FinanceTab({
               </button>
               <button
                 type="button"
+                onClick={() => {
+                  downloadPrintableReport({
+                    reportNumber,
+                    issuedAt: reportIssuedAt,
+                    filters: { type: typeFilter, category: categoryFilter },
+                    transactions: filteredTransactions,
+                    totalInflow,
+                    totalOutflow,
+                    netBalance
+                  });
+                }}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-blue-900/20 flex items-center justify-center gap-1.5 cursor-pointer text-center"
+                title="Baixar diretamente o arquivo HTML de prestação de contas pronto para impressão"
+              >
+                <FileText className="h-4 w-4" />
+                Baixar Relatório (HTML)
+              </button>
+              <button
+                type="button"
                 onClick={handleConfirmReportEmission}
-                className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-emerald-900/20 flex items-center gap-1.5 cursor-pointer animate-pulse"
+                className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-emerald-900/20 flex items-center justify-center gap-1.5 cursor-pointer animate-pulse text-center"
+                title="Salva a cópia no sistema e abre a janela de impressão do PDF formatado"
               >
                 <Printer className="h-4 w-4" />
                 Confirmar Emitir PDF & Salvar Cópia
@@ -961,7 +1971,7 @@ export default function FinanceTab({
                     <thead>
                       <tr className="bg-[#1a1a1a] border-b border-white/5 text-gray-400">
                         <th className="py-2 px-3">Tipo</th>
-                        <th className="py-2 px-3">Descrição / CPF/CNPJ</th>
+                        <th className="py-2 px-3">Descrição / CPF/CNPJ / Nome</th>
                         <th className="py-2 px-3">Categoria / Data</th>
                         <th className="py-2 px-3 text-right">Valor</th>
                       </tr>
@@ -976,6 +1986,9 @@ export default function FinanceTab({
                           </td>
                           <td className="py-2 px-3">
                             <p className="font-bold text-white">{t.description}</p>
+                            {t.payerReceiverName && (
+                              <p className="text-[10px] text-gray-300 font-medium">De/Para: {t.payerReceiverName}</p>
+                            )}
                             {t.document && <span className="text-[10px] text-gray-500 font-mono">CPF/CNPJ: {t.document}</span>}
                           </td>
                           <td className="py-2 px-3">
@@ -1024,10 +2037,39 @@ export default function FinanceTab({
               <button
                 type="button"
                 onClick={() => {
-                  setIsReportDetailModalOpen(false);
-                  handlePrintExistingReport(selectedReportCopy);
+                  downloadPrintableReport({
+                    reportNumber: selectedReportCopy.reportNumber,
+                    issuedAt: selectedReportCopy.issuedAt,
+                    filters: selectedReportCopy.filters,
+                    transactions: selectedReportCopy.transactions as Transaction[],
+                    totalInflow: selectedReportCopy.totalInflow,
+                    totalOutflow: selectedReportCopy.totalOutflow,
+                    netBalance: selectedReportCopy.netBalance
+                  });
                 }}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer text-center"
+                title="Baixar diretamente o arquivo HTML de prestação de contas pronto para impressão"
+              >
+                <FileText className="h-4 w-4" />
+                Baixar Relatório (HTML)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  printReportHTML({
+                    reportNumber: selectedReportCopy.reportNumber,
+                    issuedAt: selectedReportCopy.issuedAt,
+                    filters: selectedReportCopy.filters,
+                    transactions: selectedReportCopy.transactions as Transaction[],
+                    totalInflow: selectedReportCopy.totalInflow,
+                    totalOutflow: selectedReportCopy.totalOutflow,
+                    netBalance: selectedReportCopy.netBalance
+                  });
+                  setIsReportDetailModalOpen(false);
+                  setSelectedReportCopy(null);
+                }}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer text-center"
+                title="Abre a janela de impressão do PDF formatado"
               >
                 <Printer className="h-4 w-4" />
                 Imprimir Relatório
@@ -1040,35 +2082,64 @@ export default function FinanceTab({
       {/* ======================================================================= */}
       {/* EXCLUSIVE PRINT LAYOUT SHEET (HIDDEN IN BROWSER, ONLY VISIBLE ON PRINT) */}
       {/* ======================================================================= */}
-      {selectedReportCopy || isReportModalOpen ? (
+      {selectedReportCopy || isReportModalOpen || isPrintingDirectly ? (
         <div className="hidden print:block bg-white text-black p-8 font-sans w-full text-xs space-y-6">
           {/* Header */}
-          <div className="border-b-2 border-black pb-4 text-center space-y-1">
-            <h1 className="text-lg font-black uppercase tracking-wider">Relatório de Prestação de Contas - Livro Caixa</h1>
-            <p className="text-xs font-bold text-gray-600 uppercase tracking-widest">Associação de Moradores e Amigos</p>
+          <div className="border-b-2 border-black pb-4 flex items-center justify-between gap-4">
+            {entityConfig?.logo && (
+              <img 
+                src={entityConfig.logo} 
+                alt="Logo" 
+                className="h-16 w-16 object-cover rounded border border-gray-300" 
+                referrerPolicy="no-referrer"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).src = "https://images.unsplash.com/photo-1560179707-f14e90ef3623?auto=format&fit=crop&q=80&w=200";
+                }}
+              />
+            )}
+            <div className="text-right flex-1 space-y-1">
+              <h1 className="text-base font-black uppercase tracking-wider">Relatório de Prestação de Contas - Livro Caixa</h1>
+              <p className="text-xs font-bold text-gray-700">{entityConfig?.name || 'UniOn - Sistema de Gestão de Associação'}</p>
+              {entityConfig?.cnpj && <p className="text-[10px] font-mono text-gray-500">CNPJ: {entityConfig.cnpj}</p>}
+            </div>
           </div>
 
           {/* Metadata Grid */}
-          <div className="grid grid-cols-2 gap-4 bg-gray-100 p-4 rounded-md border border-gray-300 font-mono text-[11px]">
+          <div className="grid grid-cols-2 gap-4 bg-gray-50 p-4 rounded-md border border-gray-300 text-[10px]">
             <div>
-              <span className="text-gray-500 block">Código do Relatório (Autenticado):</span>
-              <strong className="text-black text-sm">{selectedReportCopy ? selectedReportCopy.reportNumber : reportNumber}</strong>
+              <span className="text-gray-500 block font-semibold uppercase text-[8px]">Código do Relatório (Autenticado):</span>
+              <strong className="text-black text-sm font-mono">{selectedReportCopy ? selectedReportCopy.reportNumber : reportNumber}</strong>
             </div>
             <div>
-              <span className="text-gray-500 block">Data e Hora de Emissão:</span>
-              <strong className="text-black">{selectedReportCopy ? selectedReportCopy.issuedAt : reportIssuedAt}</strong>
+              <span className="text-gray-500 block font-semibold uppercase text-[8px]">Data e Hora de Emissão:</span>
+              <strong className="text-black font-mono">{selectedReportCopy ? selectedReportCopy.issuedAt : reportIssuedAt}</strong>
             </div>
             <div className="mt-2">
-              <span className="text-gray-500 block">Responsável / Emissor:</span>
-              <strong className="text-black">Administrador</strong>
+              <span className="text-gray-500 block font-semibold uppercase text-[8px]">Responsável / Emissor:</span>
+              <strong className="text-black">Administrador de Finanças</strong>
             </div>
             <div className="mt-2">
-              <span className="text-gray-500 block">Filtros Aplicados:</span>
-              <strong className="text-black">
+              <span className="text-gray-500 block font-semibold uppercase text-[8px]">Filtros Aplicados:</span>
+              <strong className="text-black font-mono">
                 Tipo: {selectedReportCopy ? selectedReportCopy.filters.type : typeFilter} | 
                 Categoria: {selectedReportCopy ? selectedReportCopy.filters.category : categoryFilter}
               </strong>
             </div>
+
+            {entityConfig && (
+              <div className="col-span-2 border-t border-gray-200 pt-3 mt-1 grid grid-cols-2 gap-4">
+                <div>
+                  <span className="text-gray-500 block font-semibold uppercase text-[8px]">Dados da Entidade:</span>
+                  <span className="text-gray-900 font-medium">{entityConfig.name} {entityConfig.acronym ? `(${entityConfig.acronym})` : ''}</span>
+                  {entityConfig.cnpj && <span className="block text-gray-600 font-mono text-[9px]">CNPJ: {entityConfig.cnpj}</span>}
+                </div>
+                <div>
+                  <span className="text-gray-500 block font-semibold uppercase text-[8px]">Contato & Localização:</span>
+                  <span className="text-gray-800 block">{entityConfig.address}</span>
+                  <span className="text-gray-600 block font-mono text-[9px]">{entityConfig.email} | {entityConfig.phone}</span>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Transactions Table */}
@@ -1076,12 +2147,13 @@ export default function FinanceTab({
             <h3 className="text-xs font-bold text-black border-b border-black pb-1">Lançamentos Financeiros Inclusos</h3>
             <table className="w-full text-left border-collapse text-[10px]">
               <thead>
-                <tr className="border-b-2 border-black bg-gray-50 text-black font-bold">
+                <tr className="border-b border-black bg-gray-50 text-black font-bold">
                   <th className="py-2 px-3 text-left">Tipo</th>
-                  <th className="py-2 px-3 text-left">Descrição / Beneficiário</th>
+                  <th className="py-2 px-3 text-left">Descrição</th>
+                  <th className="py-2 px-3 text-left">Pagador / Recebedor</th>
                   <th className="py-2 px-3 text-left">CPF/CNPJ</th>
                   <th className="py-2 px-3 text-left">Categoria</th>
-                  <th className="py-2 px-3 text-left">Data</th>
+                  <th className="py-2 px-3 text-left">Data / Hora</th>
                   <th className="py-2 px-3 text-left">Método</th>
                   <th className="py-2 px-3 text-right">Valor</th>
                 </tr>
@@ -1091,9 +2163,12 @@ export default function FinanceTab({
                   <tr key={t.id} className="text-black">
                     <td className="py-1.5 px-3 font-bold">{t.type === 'Entrada' ? 'Receita' : 'Despesa'}</td>
                     <td className="py-1.5 px-3">{t.description}</td>
+                    <td className="py-1.5 px-3 font-semibold">{t.payerReceiverName || '-'}</td>
                     <td className="py-1.5 px-3 font-mono">{t.document || '-'}</td>
                     <td className="py-1.5 px-3">{t.category}</td>
-                    <td className="py-1.5 px-3">{dateToBRL(t.date)} {t.time || ''}</td>
+                    <td className="py-1.5 px-3 font-mono">
+                      <span>{dateToBRL(t.date)} às {t.time || '12:00:00'}</span>
+                    </td>
                     <td className="py-1.5 px-3">{t.paymentMethod || 'Pix'}</td>
                     <td className="py-1.5 px-3 text-right font-mono font-bold">
                       {t.type === 'Entrada' ? '+' : '-'} {formatBRL(t.amount)}
@@ -1110,7 +2185,7 @@ export default function FinanceTab({
               <p>Total Receitas Inclusas: <strong>{formatBRL(selectedReportCopy ? selectedReportCopy.totalInflow : totalInflow)}</strong></p>
               <p>Total Despesas Inclusas: <strong>{formatBRL(selectedReportCopy ? selectedReportCopy.totalOutflow : totalOutflow)}</strong></p>
             </div>
-            <div className="text-right p-3 bg-gray-100 rounded border border-gray-400 font-mono">
+            <div className="text-right p-3 bg-gray-50 rounded border border-gray-400 font-mono">
               <span className="text-gray-600 block text-[10px] uppercase font-bold">Saldo Final Líquido do Período</span>
               <strong className="text-base text-black font-black">
                 {formatBRL(selectedReportCopy ? selectedReportCopy.netBalance : netBalance)}
@@ -1128,7 +2203,7 @@ export default function FinanceTab({
             <div className="space-y-1">
               <div className="border-t border-black w-3/4 mx-auto pt-1"></div>
               <span>Conselho Fiscal / Auditoria</span>
-              <p className="text-gray-500">Associação Certificada</p>
+              <p className="text-gray-500">{entityConfig?.acronym || entityConfig?.name || 'Associação Certificada'}</p>
             </div>
           </div>
         </div>

@@ -3,10 +3,10 @@ import { motion, AnimatePresence } from 'motion/react';
 import { 
   Users, Search, Plus, Edit, Trash2, CheckCircle2, XCircle, 
   Mail, Phone, MapPin, X, Calendar, AlertCircle, Eye, Info,
-  Lock, ShieldCheck, ShieldAlert, Sparkles
+  Lock, ShieldCheck, ShieldAlert, Sparkles, AlertTriangle
 } from 'lucide-react';
 import { Associate } from '../types';
-import { maskDate, dateToISO, dateToBRL, maskCpfCnpj } from '../utils/formatters';
+import { maskDate, dateToISO, dateToBRL, maskCpfCnpj, formatMatricula, getNextMatriculaNumber, isMatriculaInUse } from '../utils/formatters';
 
 interface ClientsTabProps {
   clients: Associate[];
@@ -23,6 +23,7 @@ export default function ClientsTab({
 }: ClientsTabProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'Todos' | 'Ativo' | 'Inativo'>('Todos');
+  const [deletingClientId, setDeletingClientId] = useState<string | null>(null);
   
   // Modals state
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
@@ -45,6 +46,8 @@ export default function ClientsTab({
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
   const [status, setStatus] = useState<'Ativo' | 'Inativo'>('Ativo');
+  const [matricula, setMatricula] = useState<string>('');
+  const [matriculaError, setMatriculaError] = useState<string>('');
   const [joiningDate, setJoiningDate] = useState(() => {
     const today = new Date();
     const day = String(today.getDate()).padStart(2, '0');
@@ -61,6 +64,8 @@ export default function ClientsTab({
     setPhone('');
     setAddress('');
     setStatus('Ativo');
+    setMatricula(getNextMatriculaNumber(clients));
+    setMatriculaError('');
     
     const today = new Date();
     const day = String(today.getDate()).padStart(2, '0');
@@ -80,6 +85,8 @@ export default function ClientsTab({
     setAddress(client.address);
     setStatus(client.status);
     setJoiningDate(dateToBRL(client.joiningDate));
+    setMatricula(client.matricula ? formatMatricula(client.matricula) : getNextMatriculaNumber(clients));
+    setMatriculaError('');
     setIsFormModalOpen(true);
   };
 
@@ -173,6 +180,12 @@ export default function ClientsTab({
       return;
     }
 
+    const formattedMatricula = formatMatricula(matricula || getNextMatriculaNumber(clients));
+    if (isMatriculaInUse(formattedMatricula, clients, editingClient?.id)) {
+      setMatriculaError(`A matrícula ${formattedMatricula} já está em uso por outro cadastro. Escolha um número disponível.`);
+      return;
+    }
+
     const isoJoiningDate = dateToISO(joiningDate);
 
     if (editingClient) {
@@ -185,6 +198,7 @@ export default function ClientsTab({
         phone,
         address,
         status,
+        matricula: formattedMatricula,
         joiningDate: isoJoiningDate
       };
       onEditClient(updated);
@@ -197,6 +211,7 @@ export default function ClientsTab({
         phone,
         address,
         status,
+        matricula: formattedMatricula,
         joiningDate: isoJoiningDate,
         monthlyFee: 0, // Clients do not pay monthly fee
         financialStatus: 'Adimplente',
@@ -367,30 +382,57 @@ export default function ClientsTab({
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex items-center justify-center gap-1.5">
-                        <button
-                          onClick={() => handleOpenDetailsModal(client)}
-                          className="p-1.5 bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white rounded-lg text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer"
-                          title="Ver Detalhes do Cliente"
-                        >
-                          <Eye className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          onClick={() => handleOpenEditModal(client)}
-                          className="p-1.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 hover:text-blue-300 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer"
-                          title="Editar Cadastro"
-                        >
-                          <Edit className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          onClick={() => handleOpenLoginModal(client)}
-                          className="p-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 hover:text-indigo-300 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer"
-                          title="Gerenciar Credenciais de Login"
-                        >
-                          <Lock className="h-3.5 w-3.5" />
-                        </button>
-
-                      </div>
+                      {deletingClientId === client.id ? (
+                        <div className="flex items-center justify-center gap-1.5 bg-red-500/10 border border-red-500/20 px-2 py-1 rounded-lg">
+                          <span className="text-[10px] text-red-400 font-bold shrink-0">Excluir?</span>
+                          <button
+                            onClick={() => {
+                              onDeleteClient(client.id);
+                              setDeletingClientId(null);
+                            }}
+                            className="px-2 py-0.5 bg-red-600 hover:bg-red-700 text-white text-[10px] font-bold rounded cursor-pointer transition-all"
+                          >
+                            Sim
+                          </button>
+                          <button
+                            onClick={() => setDeletingClientId(null)}
+                            className="px-2 py-0.5 bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white text-[10px] font-bold rounded cursor-pointer transition-all"
+                          >
+                            Não
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button
+                            onClick={() => handleOpenDetailsModal(client)}
+                            className="p-1.5 bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white rounded-lg text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer"
+                            title="Ver Detalhes do Cliente"
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleOpenEditModal(client)}
+                            className="p-1.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 hover:text-blue-300 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer"
+                            title="Editar Cadastro"
+                          >
+                            <Edit className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleOpenLoginModal(client)}
+                            className="p-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 hover:text-indigo-300 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer"
+                            title="Gerenciar Credenciais de Login"
+                          >
+                            <Lock className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            onClick={() => setDeletingClientId(client.id)}
+                            className="p-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer"
+                            title="Excluir Cadastro"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      )}
                     </td>
                   </motion.tr>
                 ))}
@@ -474,6 +516,48 @@ export default function ClientsTab({
                   </div>
                 </div>
 
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                      Número de Matrícula (00001 - 99999) <span className="text-red-500">*</span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMatricula(getNextMatriculaNumber(clients));
+                        setMatriculaError('');
+                      }}
+                      className="text-[10px] text-indigo-400 hover:text-indigo-300 font-semibold underline cursor-pointer"
+                    >
+                      Sugerir Próxima
+                    </button>
+                  </div>
+                  <input
+                    type="text"
+                    required
+                    value={matricula}
+                    onChange={(e) => {
+                      const val = e.target.value.replace(/\D/g, '').slice(0, 5);
+                      setMatricula(val);
+                      setMatriculaError('');
+                    }}
+                    onBlur={() => {
+                      if (matricula) {
+                        setMatricula(formatMatricula(matricula));
+                      }
+                    }}
+                    placeholder="00001"
+                    className={`w-full px-3 py-2 bg-[#1a1a1a] border ${
+                      matriculaError ? 'border-red-500/80 focus:ring-red-500' : 'border-white/10 focus:ring-indigo-500'
+                    } rounded-xl text-sm font-mono text-white placeholder-gray-500 focus:outline-none focus:ring-1`}
+                  />
+                  {matriculaError && (
+                    <p className="text-[11px] text-red-400 mt-1 font-medium">
+                      {matriculaError}
+                    </p>
+                  )}
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">
@@ -545,20 +629,36 @@ export default function ClientsTab({
               </div>
 
               {/* Footer */}
-              <div className="pt-4 border-t border-white/5 flex justify-end gap-3">
-                <button
-                  type="button"
-                  onClick={() => setIsFormModalOpen(false)}
-                  className="px-4 py-2 border border-white/10 rounded-xl text-xs font-semibold text-gray-400 hover:bg-white/5 hover:text-white cursor-pointer"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-lg shadow-indigo-900/20 cursor-pointer"
-                >
-                  {editingClient ? 'Salvar Alterações' : 'Salvar Cadastro'}
-                </button>
+              <div className="pt-4 border-t border-white/5 flex items-center justify-between">
+                {editingClient ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const clientId = editingClient.id;
+                      setIsFormModalOpen(false);
+                      setDeletingClientId(clientId);
+                    }}
+                    className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 rounded-xl text-xs font-bold cursor-pointer transition-colors flex items-center gap-1.5"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span>Excluir Cadastro</span>
+                  </button>
+                ) : <div />}
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setIsFormModalOpen(false)}
+                    className="px-4 py-2 border border-white/10 rounded-xl text-xs font-semibold text-gray-400 hover:bg-white/5 hover:text-white cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-lg shadow-indigo-900/20 cursor-pointer"
+                  >
+                    {editingClient ? 'Salvar Alterações' : 'Salvar Cadastro'}
+                  </button>
+                </div>
               </div>
             </form>
           </motion.div>
@@ -652,7 +752,7 @@ export default function ClientsTab({
                   </h4>
                   <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
                     <div>
-                      <span className="text-gray-500 block">Matrícula (6 dígitos)</span>
+                      <span className="text-gray-500 block">Matrícula (5 dígitos)</span>
                       <span className="font-bold text-blue-400 text-sm font-mono">{selectedClient.matricula || 'Não gerada'}</span>
                     </div>
                     <div>
@@ -861,6 +961,46 @@ export default function ClientsTab({
                 className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-lg shadow-indigo-900/20 cursor-pointer"
               >
                 Salvar Configurações
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Dialog: Delete Client Confirmation Modal */}
+      {deletingClientId && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }} 
+            animate={{ opacity: 1, scale: 1 }} 
+            className="bg-[#111111] rounded-2xl border border-white/10 max-w-md w-full p-6 space-y-4 text-gray-200"
+          >
+            <div className="flex items-center gap-3 text-red-400">
+              <AlertTriangle className="h-6 w-6 shrink-0" />
+              <h3 className="font-bold text-base text-white">Confirmar Exclusão de Cliente</h3>
+            </div>
+            <p className="text-xs text-gray-300 leading-relaxed">
+              Tem certeza que deseja excluir permanentemente o cadastro de <strong className="text-white">{clients.find(c => c.id === deletingClientId)?.name || 'este cliente'}</strong>?
+              Esta ação removerá todos os dados e acessos e não poderá ser desfeita.
+            </p>
+            <div className="flex justify-end gap-3 pt-2 border-t border-white/5">
+              <button
+                type="button"
+                onClick={() => setDeletingClientId(null)}
+                className="px-4 py-2 bg-white/5 hover:bg-white/10 text-gray-300 rounded-xl text-xs font-semibold cursor-pointer transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onDeleteClient(deletingClientId);
+                  setDeletingClientId(null);
+                }}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-red-900/30 cursor-pointer transition-colors flex items-center gap-1.5"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                <span>Excluir Definitivamente</span>
               </button>
             </div>
           </motion.div>

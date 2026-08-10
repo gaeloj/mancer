@@ -2,9 +2,9 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Building, Users, DollarSign, Bell, LogOut, 
-  Menu, X, Sparkles, LayoutDashboard, Calendar, UserCheck
+  Menu, X, Sparkles, LayoutDashboard, Calendar, UserCheck, Settings, FileText, Receipt, GraduationCap, Briefcase
 } from 'lucide-react';
-import { Associate, Transaction, Announcement, ReportCopy, Assembly, Poll } from '../types';
+import { Associate, Transaction, Announcement, ReportCopy, Assembly, Poll, EntityConfig, AdminConfig, Charge, UserSession, Collaborator } from '../types';
 
 import OverviewTab from './OverviewTab';
 import AssociatesTab from './AssociatesTab';
@@ -12,24 +12,40 @@ import ClientsTab from './ClientsTab';
 import FinanceTab from './FinanceTab';
 import AnnouncementsTab from './AnnouncementsTab';
 import AssembliesPollsTab from './AssembliesPollsTab';
+import EntityConfigTab from './EntityConfigTab';
+import AttestationsTab from './AttestationsTab';
+import BillingChargesTab from './BillingChargesTab';
+import UeeiTab from './UeeiTab';
+import CollaboratorsTab from './CollaboratorsTab';
+import CollaboratorPortalTab from './CollaboratorPortalTab';
 
 interface AdminDashboardProps {
+  session?: UserSession | null;
   associates: Associate[];
   clients: Associate[];
+  collaborators?: Collaborator[];
   transactions: Transaction[];
   announcements: Announcement[];
   reports: ReportCopy[];
   assemblies: Assembly[];
   polls: Poll[];
+  charges: Charge[];
+  entityConfig: EntityConfig | null;
+  adminConfig: AdminConfig | null;
+  onUpdateAdminConfig: (config: AdminConfig) => Promise<void>;
   onAddAssociate: (associate: Omit<Associate, 'id'>) => void;
   onEditAssociate: (associate: Associate) => void;
   onDeleteAssociate: (id: string) => void;
   onAddClient: (client: Omit<Associate, 'id'>) => void;
   onEditClient: (client: Associate) => void;
   onDeleteClient: (id: string) => void;
+  onAddCollaborator?: (colab: Collaborator) => void;
+  onEditCollaborator?: (colab: Collaborator) => void;
+  onDeleteCollaborator?: (id: string) => void;
   onAddTransaction: (transaction: Omit<Transaction, 'id'>) => void;
   onDeleteTransaction: (id: string) => void;
   onAddAnnouncement: (announcement: Omit<Announcement, 'id'>) => void;
+  onEditAnnouncement: (announcement: Announcement) => void;
   onDeleteAnnouncement: (id: string) => void;
   onAddReport: (report: ReportCopy) => void;
   onDeleteReport: (id: string) => void;
@@ -39,26 +55,40 @@ interface AdminDashboardProps {
   onAddPoll: (poll: Omit<Poll, 'id' | 'createdAt'>) => void;
   onUpdatePoll: (poll: Poll) => void;
   onDeletePoll: (id: string) => void;
+  onAddCharge: (charge: Charge) => void;
+  onUpdateCharge: (charge: Charge) => void;
+  onDeleteCharge: (id: string) => void;
+  onUpdateEntityConfig: (config: EntityConfig) => void;
   onLogout: () => void;
 }
 
 export default function AdminDashboard({
+  session,
   associates,
   clients,
+  collaborators = [],
   transactions,
   announcements,
   reports,
   assemblies,
   polls,
+  charges = [],
+  entityConfig,
+  adminConfig,
+  onUpdateAdminConfig,
   onAddAssociate,
   onEditAssociate,
   onDeleteAssociate,
   onAddClient,
   onEditClient,
   onDeleteClient,
+  onAddCollaborator,
+  onEditCollaborator,
+  onDeleteCollaborator,
   onAddTransaction,
   onDeleteTransaction,
   onAddAnnouncement,
+  onEditAnnouncement,
   onDeleteAnnouncement,
   onAddReport,
   onDeleteReport,
@@ -68,31 +98,50 @@ export default function AdminDashboard({
   onAddPoll,
   onUpdatePoll,
   onDeletePoll,
+  onAddCharge,
+  onUpdateCharge,
+  onDeleteCharge,
+  onUpdateEntityConfig,
   onLogout
 }: AdminDashboardProps) {
-  const [activeTab, setActiveTab] = useState('overview');
+  const [activeTab, setActiveTab] = useState(() => 
+    session?.role === 'collaborator' ? 'collaborator_portal' : 'overview'
+  );
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   // Use props directly since they are separated at state/database levels
   const associatesList = associates;
   const clientsList = clients;
 
-  const totalPendingActions = associatesList.filter(assoc => {
+  const totalPendingActions = [...associatesList, ...clientsList].filter(assoc => {
     const hasPendingAgreement = assoc.installmentPlan && assoc.installmentPlan.status === 'Em Análise';
     const hasPendingReceipt = assoc.installmentPlan && assoc.installmentPlan.installments && assoc.installmentPlan.installments.some(inst => inst.status === 'Em Análise');
-    const hasPendingMonthlyReceipt = assoc.pendingMonthlyReceipts && assoc.pendingMonthlyReceipts.length > 0;
+    const hasPendingMonthlyReceipt = assoc.pendingMonthlyReceipts && assoc.pendingMonthlyReceipts.some(r => !r.status || r.status === 'Em Análise');
     return hasPendingAgreement || hasPendingReceipt || hasPendingMonthlyReceipt;
   }).length;
 
+  const pendingChargesCount = charges.filter(c => c.status === 'Pendente').length;
+
   // Menu items list
-  const menuItems = [
-    { id: 'overview', label: 'Visão Geral', icon: LayoutDashboard },
-    { id: 'associates', label: 'Associados', icon: Users, badge: associatesList.length },
-    { id: 'clients', label: 'Clientes', icon: UserCheck, badge: clientsList.length },
-    { id: 'finance', label: 'Livro Caixa', icon: DollarSign },
-    { id: 'announcements', label: 'Comunicados', icon: Bell, badge: announcements.length },
-    { id: 'assemblies_polls', label: 'Assembleias & Votações', icon: Calendar, badge: assemblies.length + polls.filter(p => p.status === 'Ativo').length }
-  ];
+  const isCollaboratorSession = session?.role === 'collaborator';
+
+  const menuItems = isCollaboratorSession
+    ? [
+        { id: 'collaborator_portal', label: 'Portal do Colaborador', icon: Briefcase }
+      ]
+    : [
+        { id: 'overview', label: 'Visão Geral', icon: LayoutDashboard },
+        { id: 'collaborators', label: 'Colaboradores', icon: Briefcase, badge: collaborators.length > 0 ? collaborators.length : undefined },
+        { id: 'associates', label: 'Associados', icon: Users, badge: associatesList.length },
+        { id: 'clients', label: 'Clientes', icon: UserCheck, badge: clientsList.length },
+        { id: 'ueei', label: 'UEEI', icon: GraduationCap },
+        { id: 'charges', label: 'Emitir Cobranças', icon: Receipt, badge: pendingChargesCount > 0 ? pendingChargesCount : undefined },
+        { id: 'finance', label: 'Livro Caixa', icon: DollarSign },
+        { id: 'attestations', label: 'Atestados & Comprovantes', icon: FileText },
+        { id: 'announcements', label: 'Comunicados', icon: Bell, badge: announcements.length },
+        { id: 'assemblies_polls', label: 'Assembleias & Votações', icon: Calendar, badge: assemblies.length + polls.filter(p => p.status === 'Ativo').length },
+        { id: 'entity_config', label: 'Dados da Entidade', icon: Settings }
+      ];
 
   const handleNavigateToTab = (tabId: string) => {
     setActiveTab(tabId);
@@ -101,6 +150,25 @@ export default function AdminDashboard({
 
   const renderActiveTab = () => {
     switch (activeTab) {
+      case 'collaborator_portal':
+        return (
+          <CollaboratorPortalTab
+            session={session}
+            collaborators={collaborators}
+            entityConfig={entityConfig}
+          />
+        );
+      case 'collaborators':
+        return (
+          <CollaboratorsTab
+            collaborators={collaborators}
+            onAddCollaborator={onAddCollaborator}
+            onEditCollaborator={onEditCollaborator}
+            onDeleteCollaborator={onDeleteCollaborator}
+            entityConfig={entityConfig}
+            onUpdateEntityConfig={onUpdateEntityConfig}
+          />
+        );
       case 'overview':
         return (
           <OverviewTab
@@ -118,6 +186,7 @@ export default function AdminDashboard({
             onEditAssociate={onEditAssociate}
             onDeleteAssociate={onDeleteAssociate}
             onRecordPayment={onRecordPayment}
+            entityConfig={entityConfig}
           />
         );
       case 'clients':
@@ -129,23 +198,56 @@ export default function AdminDashboard({
             onDeleteClient={onDeleteClient}
           />
         );
+      case 'ueei':
+        return (
+          <UeeiTab
+            entityConfig={entityConfig}
+          />
+        );
+      case 'charges':
+        return (
+          <BillingChargesTab
+            associates={associatesList}
+            clients={clientsList}
+            charges={charges}
+            entityConfig={entityConfig}
+            onAddCharge={onAddCharge}
+            onUpdateCharge={onUpdateCharge}
+            onDeleteCharge={onDeleteCharge}
+            onAddTransaction={onAddTransaction}
+          />
+        );
       case 'finance':
         return (
           <FinanceTab
             transactions={transactions}
             associates={associatesList}
             reports={reports}
+            entityConfig={entityConfig}
             onAddTransaction={onAddTransaction}
             onDeleteTransaction={onDeleteTransaction}
             onAddReport={onAddReport}
             onDeleteReport={onDeleteReport}
           />
         );
+      case 'attestations':
+        return (
+          <AttestationsTab
+            associates={associatesList}
+            clients={clientsList}
+            transactions={transactions}
+            entityConfig={entityConfig}
+          />
+        );
       case 'announcements':
         return (
           <AnnouncementsTab
             announcements={announcements}
+            associates={associatesList}
+            clients={clientsList}
+            entityConfig={entityConfig}
             onAddAnnouncement={onAddAnnouncement}
+            onEditAnnouncement={onEditAnnouncement}
             onDeleteAnnouncement={onDeleteAnnouncement}
           />
         );
@@ -154,6 +256,9 @@ export default function AdminDashboard({
           <AssembliesPollsTab
             assemblies={assemblies}
             polls={polls}
+            associates={associatesList}
+            clients={clientsList}
+            entityConfig={entityConfig}
             onAddAssembly={onAddAssembly}
             onDeleteAssembly={onDeleteAssembly}
             onAddPoll={onAddPoll}
@@ -161,7 +266,25 @@ export default function AdminDashboard({
             onDeletePoll={onDeletePoll}
           />
         );
+      case 'entity_config':
+        return (
+          <EntityConfigTab
+            entityConfig={entityConfig}
+            onUpdateEntityConfig={onUpdateEntityConfig}
+            adminConfig={adminConfig}
+            onUpdateAdminConfig={onUpdateAdminConfig}
+          />
+        );
       default:
+        if (isCollaboratorSession) {
+          return (
+            <CollaboratorPortalTab
+              session={session}
+              collaborators={collaborators}
+              entityConfig={entityConfig}
+            />
+          );
+        }
         return null;
     }
   };
@@ -172,11 +295,29 @@ export default function AdminDashboard({
       {/* Mobile Top Header */}
       <div className="md:hidden bg-[#111111] border-b border-white/5 px-4 py-3 flex justify-between items-center sticky top-0 z-30 shadow-md">
         <div className="flex items-center gap-2">
-          <div className="h-8 w-8 bg-gradient-to-tr from-blue-600 to-blue-700 rounded-lg flex items-center justify-center text-white">
-            <Building className="h-4.5 w-4.5" />
+          <div className="h-8 w-8 bg-indigo-500/10 border border-indigo-500/20 rounded-lg flex items-center justify-center text-indigo-400 overflow-hidden shrink-0">
+            {isCollaboratorSession ? (
+              <GraduationCap className="h-4 w-4" />
+            ) : entityConfig?.logo ? (
+              <img 
+                src={entityConfig.logo} 
+                alt="Logo" 
+                className="w-full h-full object-cover" 
+                referrerPolicy="no-referrer"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).src = "https://images.unsplash.com/photo-1560179707-f14e90ef3623?auto=format&fit=crop&q=80&w=200";
+                }}
+              />
+            ) : (
+              <Building className="h-4 w-4" />
+            )}
           </div>
-          <span className="font-extrabold text-white text-sm tracking-tight">GestaAssoc</span>
-          <span className="text-[9px] bg-blue-500/10 text-blue-400 border border-blue-500/20 px-1.5 py-0.5 rounded font-bold uppercase">Admin</span>
+          <span className="font-extrabold text-white text-sm tracking-tight">
+            {isCollaboratorSession ? 'Portal Colaborador - UEEI' : (entityConfig?.acronym || entityConfig?.name || 'Escola')}
+          </span>
+          <span className="text-[9px] bg-blue-500/10 text-blue-400 border border-blue-500/20 px-1.5 py-0.5 rounded font-bold uppercase">
+            {isCollaboratorSession ? 'UEEI' : 'Admin'}
+          </span>
         </div>
         
         <button
@@ -203,12 +344,30 @@ export default function AdminDashboard({
         <div className="space-y-6">
           {/* Logo Brand block */}
           <div className="h-16 border-b border-white/5 flex items-center gap-3 px-6 shrink-0 bg-[#1a1a1a]/40">
-            <div className="h-9 w-9 bg-gradient-to-tr from-blue-600 to-blue-700 rounded-xl flex items-center justify-center text-white shadow shadow-blue-900/20">
-              <Building className="h-5 w-5" />
+            <div className="h-9 w-9 bg-indigo-500/10 border border-indigo-500/20 rounded-xl flex items-center justify-center text-indigo-400 overflow-hidden shrink-0">
+              {isCollaboratorSession ? (
+                <GraduationCap className="h-5 w-5 text-indigo-400" />
+              ) : entityConfig?.logo ? (
+                <img 
+                  src={entityConfig.logo} 
+                  alt="Logo" 
+                  className="w-full h-full object-cover" 
+                  referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).src = "https://images.unsplash.com/photo-1560179707-f14e90ef3623?auto=format&fit=crop&q=80&w=200";
+                  }}
+                />
+              ) : (
+                <Building className="h-5 w-5" />
+              )}
             </div>
-            <div>
-              <span className="font-extrabold text-white text-base tracking-tight block">GestaAssoc</span>
-              <span className="text-[9px] text-blue-500 font-bold uppercase tracking-wider block">Gestão Administrativa</span>
+            <div className="min-w-0">
+              <span className="font-extrabold text-white text-xs sm:text-sm tracking-tight block leading-tight truncate">
+                {isCollaboratorSession ? 'Escola Indígena UEEI' : (entityConfig?.name || 'Escola')}
+              </span>
+              <span className="text-[9px] text-indigo-400 font-bold uppercase tracking-wider block">
+                {isCollaboratorSession ? 'Portal do Colaborador' : 'Gestão Administrativa'}
+              </span>
             </div>
           </div>
 
@@ -269,9 +428,13 @@ export default function AdminDashboard({
         <div className="p-4 border-t border-white/5 space-y-3 shrink-0">
           <div className="bg-[#1a1a1a] border border-white/5 p-3 rounded-xl">
             <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Status do Servidor</p>
-            <div className="flex items-center gap-1.5 text-xs text-gray-300 font-semibold">
-              <span className="h-2 w-2 rounded-full bg-emerald-500 inline-block animate-pulse"></span>
-              <span>Online (LocalDB)</span>
+            <div className="flex items-center gap-1.5 text-xs text-emerald-400 font-semibold">
+              <span className="h-2 w-2 rounded-full bg-emerald-500 inline-block animate-pulse shrink-0"></span>
+              <span className="truncate">
+                {localStorage.getItem('db_provider') === 'firebase' 
+                  ? 'Online (Firebase Firestore)' 
+                  : 'Online (Supabase Cloud)'}
+              </span>
             </div>
           </div>
 
@@ -296,6 +459,16 @@ export default function AdminDashboard({
           </div>
 
           <div className="flex items-center gap-5">
+            {session?.role === 'collaborator' && (
+              <div className="px-3 py-1.5 bg-indigo-500/10 border border-indigo-500/30 text-indigo-300 text-xs rounded-xl flex items-center gap-2 font-medium shadow-sm">
+                <Briefcase className="h-4 w-4 text-indigo-400 shrink-0" />
+                <span>
+                  Sessão Colaborador: <strong className="text-white">{session.collaboratorName || 'Colaborador'}</strong>
+                  {session.collaboratorRole && <span className="opacity-75"> ({session.collaboratorRole})</span>}
+                </span>
+              </div>
+            )}
+
             {/* Live Clock / Calendar */}
             <div className="text-right text-xs">
               <span className="text-gray-500 block font-medium">Data Local</span>

@@ -2,13 +2,18 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Calendar, Clock, MapPin, ClipboardList, Trash2, Plus, 
-  Users, CheckCircle2, AlertTriangle, Play, Check, BarChart3, Info
+  Users, CheckCircle2, AlertTriangle, Play, Check, BarChart3, Info, Upload,
+  MessageSquare, Send, Copy, Phone, X
 } from 'lucide-react';
-import { Assembly, Poll, PollOption } from '../types';
+import { Assembly, Poll, PollOption, Associate, EntityConfig } from '../types';
+import { dateToBRL } from '../utils/formatters';
 
 interface AssembliesPollsTabProps {
   assemblies: Assembly[];
   polls: Poll[];
+  associates?: Associate[];
+  clients?: Associate[];
+  entityConfig?: EntityConfig | null;
   onAddAssembly: (assembly: Omit<Assembly, 'id' | 'createdAt'>) => void;
   onDeleteAssembly: (id: string) => void;
   onAddPoll: (poll: Omit<Poll, 'id' | 'createdAt'>) => void;
@@ -19,6 +24,9 @@ interface AssembliesPollsTabProps {
 export default function AssembliesPollsTab({
   assemblies,
   polls,
+  associates = [],
+  clients = [],
+  entityConfig,
   onAddAssembly,
   onDeleteAssembly,
   onAddPoll,
@@ -26,6 +34,109 @@ export default function AssembliesPollsTab({
   onDeletePoll
 }: AssembliesPollsTabProps) {
   const [subTab, setSubTab] = useState<'assemblies' | 'polls'>('assemblies');
+
+  // WhatsApp Convocatória / Send State
+  const [selectedAssemblyForSend, setSelectedAssemblyForSend] = useState<Assembly | null>(null);
+  const [selectedPollForSend, setSelectedPollForSend] = useState<Poll | null>(null);
+  const [selectedRecipientId, setSelectedRecipientId] = useState<string>('');
+  const [sendPhone, setSendPhone] = useState<string>('');
+  const [sendCustomMessage, setSendCustomMessage] = useState<string>('');
+  const [copiedSuccess, setCopiedSuccess] = useState<boolean>(false);
+
+  const allRecipients = [...associates, ...clients];
+
+  const handleOpenAssemblySendModal = (assembly: Assembly) => {
+    setSelectedAssemblyForSend(assembly);
+    setSelectedPollForSend(null);
+    setSelectedRecipientId('');
+    setSendPhone('');
+    setCopiedSuccess(false);
+
+    const entityName = entityConfig?.name || 'Associação / Entidade';
+    const eventType = assembly.type === 'Atividade' ? 'Atividade Oficial' : 'Assembleia Geral';
+
+    const msg = `📜 *CONVOCAÇÃO OFICIAL - ${eventType.toUpperCase()}*
+🏛️ *${entityName}*
+
+Prezado(a) Associado(a),
+
+Servimo-nos do presente para *CONVOCAR* Vossa Senhoria para participar do nosso evento/reunião:
+
+📌 *Evento / Pauta:* ${assembly.title}
+📅 *Data:* ${dateToBRL(assembly.date)}
+⏰ *Horário:* ${assembly.time}h
+📍 *Local:* ${assembly.location}
+
+📋 *Ordem do Dia / Pauta:*
+${assembly.agenda}
+
+Sua presença e participação ativa são de extrema importância!
+
+Atenciosamente,
+*${entityName}*`;
+
+    setSendCustomMessage(msg);
+  };
+
+  const handleOpenPollSendModal = (poll: Poll) => {
+    setSelectedPollForSend(poll);
+    setSelectedAssemblyForSend(null);
+    setSelectedRecipientId('');
+    setSendPhone('');
+    setCopiedSuccess(false);
+
+    const entityName = entityConfig?.name || 'Associação / Entidade';
+
+    const msg = `🗳️ *CONVOCAÇÃO PARA VOTAÇÃO OFICIAL*
+🏛️ *${entityName}*
+
+Prezado(a) Associado(a),
+
+Convidamos e convocamos V. Sa. a participar da seguinte votação em andamento no nosso portal:
+
+📌 *Votação:* ${poll.title}
+📅 *Período:* De ${dateToBRL(poll.startDate || poll.date)} (${poll.startTime || poll.time || '00:00'}h) até ${dateToBRL(poll.endDate || poll.date)} (${poll.endTime || poll.time || '23:59'}h)
+📍 *Local:* ${poll.location || 'Portal do Associado'}
+
+📋 *Descrição / Pauta:*
+${poll.agenda}
+
+Acesse o portal da entidade para registrar seu voto com segurança.
+
+Atenciosamente,
+*${entityName}*`;
+
+    setSendCustomMessage(msg);
+  };
+
+  const handleRecipientChange = (recipientId: string) => {
+    setSelectedRecipientId(recipientId);
+    if (!recipientId) {
+      setSendPhone('');
+      return;
+    }
+    const found = allRecipients.find(r => r.id === recipientId);
+    if (found && found.phone) {
+      setSendPhone(found.phone);
+    }
+  };
+
+  const handleExecuteSendWhatsApp = () => {
+    if (!sendPhone.trim()) {
+      alert('Por favor, selecione um destinatário ou informe um número de telefone com DDD.');
+      return;
+    }
+    const cleanPhone = sendPhone.replace(/\D/g, '');
+    const phoneWithDDD = cleanPhone.length <= 11 ? `55${cleanPhone}` : cleanPhone;
+    const url = `https://api.whatsapp.com/send?phone=${phoneWithDDD}&text=${encodeURIComponent(sendCustomMessage)}`;
+    window.open(url, '_blank');
+  };
+
+  const handleCopyMessage = () => {
+    navigator.clipboard.writeText(sendCustomMessage);
+    setCopiedSuccess(true);
+    setTimeout(() => setCopiedSuccess(false), 2500);
+  };
 
   // Inline Confirmation States
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -47,12 +158,33 @@ export default function AssembliesPollsTab({
   // Poll Form State
   const [isPollModalOpen, setIsPollModalOpen] = useState(false);
   const [pollTitle, setPollTitle] = useState('');
-  const [pollDate, setPollDate] = useState('');
-  const [pollTime, setPollTime] = useState('');
   const [pollLocation, setPollLocation] = useState('');
   const [pollAgenda, setPollAgenda] = useState('');
+  const [pollStartDate, setPollStartDate] = useState('');
+  const [pollStartTime, setPollStartTime] = useState('');
+  const [pollEndDate, setPollEndDate] = useState('');
+  const [pollEndTime, setPollEndTime] = useState('');
+  const [pollHasImages, setPollHasImages] = useState(false);
   const [newOptionText, setNewOptionText] = useState('');
-  const [pollOptions, setPollOptions] = useState<string[]>([]);
+  const [newOptionImageUrl, setNewOptionImageUrl] = useState('');
+  const [pollOptions, setPollOptions] = useState<{ text: string, imageUrl?: string }[]>([]);
+
+  const handleOptionImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 2 * 1024 * 1024) {
+        alert("O tamanho da imagem não deve exceder 2MB.");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (event.target?.result) {
+          setNewOptionImageUrl(event.target.result as string);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
 
   // Format date helper
   const dateToBRL = (dateStr: string) => {
@@ -90,13 +222,18 @@ export default function AssembliesPollsTab({
 
   const handleAddPollOption = () => {
     setPollError(null);
-    if (!newOptionText.trim()) return;
-    if (pollOptions.includes(newOptionText.trim())) {
+    const trimmed = newOptionText.trim();
+    if (!trimmed) return;
+    if (pollOptions.some(opt => opt.text.toLowerCase() === trimmed.toLowerCase())) {
       setPollError('Esta opção já foi adicionada!');
       return;
     }
-    setPollOptions([...pollOptions, newOptionText.trim()]);
+    setPollOptions([...pollOptions, { 
+      text: trimmed, 
+      imageUrl: pollHasImages && newOptionImageUrl.trim() ? newOptionImageUrl.trim() : undefined 
+    }]);
     setNewOptionText('');
+    setNewOptionImageUrl('');
   };
 
   const handleRemovePollOption = (index: number) => {
@@ -106,8 +243,8 @@ export default function AssembliesPollsTab({
   const handleAddPollSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setPollError(null);
-    if (!pollTitle || !pollDate || !pollTime || !pollLocation || !pollAgenda) {
-      setPollError('Por favor, preencha todos os campos fundamentais!');
+    if (!pollTitle || !pollStartDate || !pollStartTime || !pollEndDate || !pollEndTime || !pollLocation || !pollAgenda) {
+      setPollError('Por favor, preencha todos os campos fundamentais, incluindo data e hora de início/término!');
       return;
     }
     if (pollOptions.length < 2) {
@@ -115,29 +252,40 @@ export default function AssembliesPollsTab({
       return;
     }
 
-    const optionsList: PollOption[] = pollOptions.map((text, idx) => ({
+    const optionsList: PollOption[] = pollOptions.map((opt, idx) => ({
       id: `opt-${Date.now()}-${idx}`,
-      text,
+      text: opt.text,
+      imageUrl: opt.imageUrl,
       votes: 0
     }));
 
     onAddPoll({
       title: pollTitle,
-      date: pollDate,
-      time: pollTime,
+      date: pollEndDate, // fallback for legacy
+      time: pollEndTime, // fallback for legacy
       location: pollLocation,
       agenda: pollAgenda,
       options: optionsList,
       status: 'Ativo',
-      voters: []
+      voters: [],
+      startDate: pollStartDate,
+      startTime: pollStartTime,
+      endDate: pollEndDate,
+      endTime: pollEndTime,
+      hasImages: pollHasImages
     });
 
     // Reset state
     setPollTitle('');
-    setPollDate('');
-    setPollTime('');
     setPollLocation('');
     setPollAgenda('');
+    setPollStartDate('');
+    setPollStartTime('');
+    setPollEndDate('');
+    setPollEndTime('');
+    setPollHasImages(false);
+    setNewOptionText('');
+    setNewOptionImageUrl('');
     setPollOptions([]);
     setPollError(null);
     setIsPollModalOpen(false);
@@ -295,6 +443,23 @@ export default function AssembliesPollsTab({
                         {assembly.agenda}
                       </div>
                     </div>
+
+                    {/* Action Footer */}
+                    <div className="pt-3 border-t border-white/5 flex justify-between items-center text-xs">
+                      <span className="text-gray-500 font-medium flex items-center gap-1 text-[11px]">
+                        <CheckCircle2 className="h-3.5 w-3.5 text-blue-400" />
+                        Convocatória Oficial
+                      </span>
+
+                      <button
+                        onClick={() => handleOpenAssemblySendModal(assembly)}
+                        className="px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 rounded-xl font-bold flex items-center gap-1.5 transition-all cursor-pointer text-xs border border-emerald-500/20"
+                        title="Enviar Convocação via WhatsApp"
+                      >
+                        <MessageSquare className="h-3.5 w-3.5" />
+                        Enviar Convocação WhatsApp
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -325,7 +490,7 @@ export default function AssembliesPollsTab({
           ) : (
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
               {polls.map((poll) => {
-                const totalVotes = poll.options.reduce((sum, opt) => sum + opt.votes, 0);
+                const totalVotes = poll.options.reduce((sum, opt) => sum + (Number(opt.votes) || 0), 0);
                 const winnerOption = poll.options.find(opt => opt.id === poll.winnerOptionId);
 
                 return (
@@ -385,18 +550,20 @@ export default function AssembliesPollsTab({
                       </div>
 
                       {/* Details of setup */}
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 p-3 bg-white/5 rounded-xl text-xs text-gray-300 font-semibold border border-white/5">
-                        <div className="flex items-center gap-1.5">
-                          <Calendar className="h-4 w-4 text-blue-400" />
-                          <span>{dateToBRL(poll.date)}</span>
+                      <div className="space-y-2 p-3 bg-white/5 rounded-xl text-xs text-gray-300 font-semibold border border-white/5">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
+                          <div className="flex items-center gap-1.5 text-blue-400">
+                            <Play className="h-3.5 w-3.5 shrink-0" />
+                            <span>Data e Hora de Início: <strong className="text-white font-bold">{poll.startDate ? dateToBRL(poll.startDate) : dateToBRL(poll.date)} às {poll.startTime || poll.time || '00:00'}h</strong></span>
+                          </div>
+                          <div className="flex items-center gap-1.5 text-amber-400">
+                            <Clock className="h-3.5 w-3.5 shrink-0" />
+                            <span>Data e Hora de Término: <strong className="text-white font-bold">{poll.endDate ? dateToBRL(poll.endDate) : dateToBRL(poll.date)} às {poll.endTime || poll.time || '23:59'}h</strong></span>
+                          </div>
                         </div>
-                        <div className="flex items-center gap-1.5">
-                          <Clock className="h-4 w-4 text-blue-400" />
-                          <span>{poll.time}h</span>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <MapPin className="h-4 w-4 text-blue-400" />
-                          <span className="truncate">{poll.location}</span>
+                        <div className="flex items-center gap-1.5 text-[11px] pt-1.5 border-t border-white/5 text-gray-400">
+                          <MapPin className="h-3.5 w-3.5 text-blue-400 shrink-0" />
+                          <span className="truncate">Local: {poll.location}</span>
                         </div>
                       </div>
 
@@ -418,18 +585,30 @@ export default function AssembliesPollsTab({
 
                         <div className="space-y-2">
                           {poll.options.map(option => {
-                            const percent = totalVotes > 0 ? Math.round((option.votes / totalVotes) * 100) : 0;
+                            const optVotes = Number(option.votes) || 0;
+                            const percent = totalVotes > 0 ? Math.round((optVotes / totalVotes) * 100) : 0;
                             const isWinner = poll.status === 'Encerrado' && option.id === poll.winnerOptionId;
                             
                             return (
                               <div key={option.id} className="space-y-1.5">
                                 <div className="flex justify-between items-center text-xs">
-                                  <span className={`font-bold flex items-center gap-1.5 ${isWinner ? 'text-emerald-400' : 'text-gray-300'}`}>
-                                    {isWinner && <Check className="h-4 w-4 text-emerald-400" />}
-                                    {option.text}
+                                  <span className={`font-bold flex items-center gap-2 ${isWinner ? 'text-emerald-400' : 'text-gray-300'}`}>
+                                    {isWinner && <Check className="h-4 w-4 text-emerald-400 shrink-0" />}
+                                    {poll.hasImages && (
+                                      <img 
+                                        src={option.imageUrl || "https://images.unsplash.com/photo-1511367461989-f85a21fda167?w=100&h=100&fit=crop"} 
+                                        alt={option.text} 
+                                        className="h-6 w-6 rounded-md object-cover border border-white/10 shrink-0" 
+                                        referrerPolicy="no-referrer"
+                                        onError={(e) => {
+                                          (e.target as HTMLImageElement).src = "https://images.unsplash.com/photo-1511367461989-f85a21fda167?w=100&h=100&fit=crop";
+                                        }}
+                                      />
+                                    )}
+                                    <span>{option.text}</span>
                                   </span>
                                   <span className="font-mono text-gray-400 font-bold">
-                                    {option.votes} votos ({percent}%)
+                                    {optVotes} {optVotes === 1 ? 'voto' : 'votos'} ({percent}%)
                                   </span>
                                 </div>
                                 <div className="h-2 w-full bg-white/5 rounded-full overflow-hidden border border-white/5">
@@ -462,7 +641,18 @@ export default function AssembliesPollsTab({
                       )}
 
                       {/* Action buttons */}
-                      {closeConfirmId === poll.id ? (
+                      <div className="space-y-2 pt-2 border-t border-white/5">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenPollSendModal(poll)}
+                          className="w-full py-2 bg-emerald-500/10 hover:bg-emerald-500 hover:text-black border border-emerald-500/20 text-emerald-400 font-bold text-xs rounded-xl transition-all cursor-pointer shadow-sm text-center flex items-center justify-center gap-1.5"
+                          title="Enviar Notificação de Votação via WhatsApp"
+                        >
+                          <MessageSquare className="h-4 w-4" />
+                          Notificar Votação via WhatsApp
+                        </button>
+
+                        {closeConfirmId === poll.id ? (
                         <div className="space-y-2 p-3 bg-amber-500/5 border border-amber-500/10 rounded-xl animate-fade-in">
                           <p className="text-[11px] text-amber-400 font-semibold leading-tight text-center">
                             Tem certeza de que deseja encerrar esta votação e revelar o vencedor aos associados? Novos votos serão bloqueados.
@@ -517,7 +707,8 @@ export default function AssembliesPollsTab({
                       )}
                     </div>
                   </div>
-                );
+                </div>
+              );
               })}
             </div>
           )}
@@ -690,23 +881,77 @@ export default function AssembliesPollsTab({
                 />
               </div>
 
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider">
+                  Deseja inserir fotos/imagens para as opções?
+                </label>
+                <div className="flex gap-4 p-2.5 bg-[#161616] rounded-xl border border-white/5">
+                  <label className="flex items-center gap-2 text-xs text-gray-300 font-semibold cursor-pointer">
+                    <input
+                      type="radio"
+                      name="pollHasImages"
+                      checked={pollHasImages}
+                      onChange={() => setPollHasImages(true)}
+                      className="accent-blue-500"
+                    />
+                    Sim, inserir fotos
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-gray-300 font-semibold cursor-pointer">
+                    <input
+                      type="radio"
+                      name="pollHasImages"
+                      checked={!pollHasImages}
+                      onChange={() => {
+                        setPollHasImages(false);
+                        setNewOptionImageUrl('');
+                      }}
+                      className="accent-blue-500"
+                    />
+                    Não, apenas texto
+                  </label>
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1">
-                  <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider">Data Limite de Voto</label>
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider">Data de Início</label>
                   <input
                     type="date"
-                    value={pollDate}
-                    onChange={(e) => setPollDate(e.target.value)}
+                    value={pollStartDate}
+                    onChange={(e) => setPollStartDate(e.target.value)}
                     className="w-full px-3 py-2 bg-[#1a1a1a] border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
                     required
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider">Horário Limite</label>
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider">Hora de Início</label>
                   <input
                     type="time"
-                    value={pollTime}
-                    onChange={(e) => setPollTime(e.target.value)}
+                    value={pollStartTime}
+                    onChange={(e) => setPollStartTime(e.target.value)}
+                    className="w-full px-3 py-2 bg-[#1a1a1a] border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider">Data de Término</label>
+                  <input
+                    type="date"
+                    value={pollEndDate}
+                    onChange={(e) => setPollEndDate(e.target.value)}
+                    className="w-full px-3 py-2 bg-[#1a1a1a] border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    required
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider">Hora de Término</label>
+                  <input
+                    type="time"
+                    value={pollEndTime}
+                    onChange={(e) => setPollEndTime(e.target.value)}
                     className="w-full px-3 py-2 bg-[#1a1a1a] border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
                     required
                   />
@@ -739,34 +984,109 @@ export default function AssembliesPollsTab({
 
               {/* Options Builder */}
               <div className="space-y-2 border-t border-white/5 pt-4">
-                <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider">Opções de Voto (Mínimo: 2)</label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="Nova opção..."
-                    value={newOptionText}
-                    onChange={(e) => setNewOptionText(e.target.value)}
-                    className="flex-1 px-3 py-2 bg-[#1a1a1a] border border-white/10 rounded-xl text-xs text-white placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  />
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider">Opções de Voto (Mínimo: 2)</label>
+                <div className="space-y-2 bg-[#161616] p-3 rounded-xl border border-white/5">
+                  <div className="space-y-1">
+                    <label className="block text-[9px] font-bold text-gray-500 uppercase">Texto da Opção</label>
+                    <input
+                      type="text"
+                      placeholder="Ex: Chapa 1, Candidato João, Opção Sim, etc..."
+                      value={newOptionText}
+                      onChange={(e) => setNewOptionText(e.target.value)}
+                      className="w-full px-3 py-2 bg-[#1a1a1a] border border-white/10 rounded-xl text-xs text-white placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  </div>
+
+                  {pollHasImages && (
+                    <div className="space-y-1.5">
+                      <label className="block text-[9px] font-bold text-gray-500 uppercase">Foto da Opção / Candidato</label>
+                      
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {/* Upload Box */}
+                        <div className="border border-dashed border-white/10 hover:border-blue-500/30 rounded-xl p-2.5 bg-[#1a1a1a]/50 flex flex-col items-center justify-center text-center group transition-colors relative min-h-[85px]">
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={handleOptionImageUpload}
+                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                          />
+                          <Upload className="h-4.5 w-4.5 text-gray-400 group-hover:text-blue-400 transition-colors mb-1" />
+                          <p className="text-[10px] font-bold text-gray-200">Upload de Imagem</p>
+                          <p className="text-[8px] text-gray-500">PNG, JPG até 2MB</p>
+                        </div>
+
+                        {/* Preview / Link Input */}
+                        <div className="flex flex-col justify-between bg-[#1a1a1a]/40 border border-white/5 rounded-xl p-2.5 space-y-1.5">
+                          {newOptionImageUrl ? (
+                            <div className="flex items-center gap-2">
+                              <img
+                                src={newOptionImageUrl}
+                                alt="Previa"
+                                className="h-8 w-8 rounded-lg object-cover border border-white/10 bg-black/20 shrink-0"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <span className="text-[9px] font-bold text-emerald-400 block">✓ Carregada</span>
+                                <button
+                                  type="button"
+                                  onClick={() => setNewOptionImageUrl('')}
+                                  className="text-[8px] text-red-400 hover:text-red-300 font-bold uppercase cursor-pointer block"
+                                >
+                                  Remover
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex flex-col justify-center h-full">
+                              <span className="text-[9px] text-gray-500 italic text-center">Nenhuma imagem</span>
+                            </div>
+                          )}
+                          
+                          <input
+                            type="text"
+                            placeholder="Ou cole o link da imagem..."
+                            value={newOptionImageUrl.startsWith('data:') ? '' : newOptionImageUrl}
+                            onChange={(e) => setNewOptionImageUrl(e.target.value)}
+                            className="w-full px-2 py-1 bg-[#1a1a1a] border border-white/10 rounded-lg text-[9px] text-white placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   <button
                     type="button"
                     onClick={handleAddPollOption}
-                    className="px-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center cursor-pointer"
+                    className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer"
                   >
-                    Adicionar
+                    <Plus className="h-4.5 w-4.5" /> Adicionar Opção à Lista
                   </button>
                 </div>
 
                 {/* Local Options list */}
                 {pollOptions.length > 0 ? (
                   <div className="border border-white/5 rounded-xl bg-[#141414] divide-y divide-white/5 overflow-hidden">
-                    {pollOptions.map((optText, index) => (
-                      <div key={index} className="flex justify-between items-center py-2 px-3 text-xs text-gray-300 font-semibold bg-[#1a1a1a]/40">
-                        <span>{index + 1}. {optText}</span>
+                    {pollOptions.map((opt, index) => (
+                      <div key={index} className="flex justify-between items-center py-2 px-3 text-xs text-gray-300 font-semibold bg-[#1a1a1a]/40 gap-4">
+                        <div className="flex items-center gap-2">
+                          <span className="text-gray-500 font-mono text-[10px]">{index + 1}.</span>
+                          {pollHasImages && (
+                            <img 
+                              src={opt.imageUrl || "https://images.unsplash.com/photo-1511367461989-f85a21fda167?w=100&h=100&fit=crop"} 
+                              alt={opt.text} 
+                              className="h-7 w-7 rounded-md object-cover border border-white/10 shrink-0" 
+                              referrerPolicy="no-referrer"
+                              onError={(e) => {
+                                // Fallback image if broken URL
+                                (e.target as HTMLImageElement).src = "https://images.unsplash.com/photo-1511367461989-f85a21fda167?w=100&h=100&fit=crop";
+                              }}
+                            />
+                          )}
+                          <span>{opt.text}</span>
+                        </div>
                         <button
                           type="button"
                           onClick={() => handleRemovePollOption(index)}
-                          className="text-red-400 hover:text-red-300 font-bold text-[10px] uppercase cursor-pointer"
+                          className="text-red-400 hover:text-red-300 font-bold text-[10px] uppercase cursor-pointer shrink-0"
                         >
                           Remover
                         </button>
@@ -796,6 +1116,130 @@ export default function AssembliesPollsTab({
                 </button>
               </div>
             </form>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Dialog: Transmit Convocatória / Poll via WhatsApp */}
+      {(selectedAssemblyForSend || selectedPollForSend) && (
+        <div id="send-convocatoria-whatsapp-modal" className="fixed inset-0 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-[#111111] rounded-2xl shadow-2xl border border-white/10 max-w-lg w-full overflow-hidden text-gray-200"
+          >
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-white/5 flex justify-between items-center bg-[#1a1a1a]/40">
+              <div className="flex items-center gap-2 text-emerald-400 font-bold text-sm">
+                <MessageSquare className="h-5 w-5" />
+                {selectedAssemblyForSend ? 'Transmitir Convocatória via WhatsApp' : 'Transmitir Votação via WhatsApp'}
+              </div>
+              <button 
+                onClick={() => {
+                  setSelectedAssemblyForSend(null);
+                  setSelectedPollForSend(null);
+                }} 
+                className="text-gray-400 hover:text-white cursor-pointer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-6 space-y-4">
+              {/* Recipient Selection */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">
+                  Selecionar Destinatário (Associado / Cliente)
+                </label>
+                <select
+                  value={selectedRecipientId}
+                  onChange={(e) => handleRecipientChange(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#1a1a1a] border border-white/10 rounded-xl text-sm text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                >
+                  <option value="">-- Digitar número avulso ou selecionar abaixo --</option>
+                  {allRecipients.map((rec) => (
+                    <option key={rec.id} value={rec.id}>
+                      {rec.name} {rec.phone ? `(${rec.phone})` : '(Sem Telefone)'}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Phone Input */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">
+                  Telefone WhatsApp (com DDD) <span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <Phone className="absolute left-3 top-2.5 h-4 w-4 text-gray-500" />
+                  <input
+                    type="text"
+                    value={sendPhone}
+                    onChange={(e) => setSendPhone(e.target.value)}
+                    placeholder="Ex: 87999998888"
+                    className="w-full pl-9 pr-3 py-2 bg-[#1a1a1a] border border-white/10 rounded-xl text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 font-mono"
+                  />
+                </div>
+              </div>
+
+              {/* Custom Message Preview / Editor */}
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                    Texto da Convocatória (Personalizável)
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleCopyMessage}
+                    className="text-xs text-emerald-400 hover:text-emerald-300 flex items-center gap-1 font-semibold cursor-pointer"
+                  >
+                    {copiedSuccess ? (
+                      <>
+                        <Check className="h-3.5 w-3.5 text-emerald-400" />
+                        Copiado!
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="h-3.5 w-3.5" />
+                        Copiar Texto
+                      </>
+                    )}
+                  </button>
+                </div>
+                <textarea
+                  rows={10}
+                  value={sendCustomMessage}
+                  onChange={(e) => setSendCustomMessage(e.target.value)}
+                  className="w-full px-3 py-2 bg-[#1a1a1a] border border-white/10 rounded-xl text-xs font-mono text-emerald-300 focus:outline-none focus:ring-1 focus:ring-emerald-500 resize-none leading-relaxed"
+                />
+              </div>
+
+              {/* Actions */}
+              <div className="pt-3 border-t border-white/5 flex flex-wrap items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedAssemblyForSend(null);
+                    setSelectedPollForSend(null);
+                  }}
+                  className="px-4 py-2 border border-white/10 rounded-xl text-xs font-semibold text-gray-400 hover:bg-white/5 hover:text-white cursor-pointer"
+                >
+                  Cancelar
+                </button>
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={handleExecuteSendWhatsApp}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-emerald-900/20 cursor-pointer flex items-center gap-1.5"
+                  >
+                    <Send className="h-4 w-4" />
+                    Enviar via WhatsApp
+                  </button>
+                </div>
+              </div>
+            </div>
           </motion.div>
         </div>
       )}
